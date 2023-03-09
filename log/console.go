@@ -9,7 +9,7 @@ import (
 
 var _defaultLogger = logrus.New()
 
-const defaultTimestampFormat = time.RFC3339
+// const defaultTimestampFormat = time.RFC3339
 
 type Formatter struct {
 	TimestampFormat string
