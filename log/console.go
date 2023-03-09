@@ -23,7 +23,7 @@ func DefaultLogger() *logrus.Logger {
 	return _defaultLogger
 }
 func init() {
-	logrus.SetFormatter(&logrus.JSONFormatter{
+	_defaultLogger.SetFormatter(&logrus.JSONFormatter{
 		TimestampFormat: time.RFC3339Nano,
 	})
 	_defaultLogger.SetOutput(os.Stdout)
