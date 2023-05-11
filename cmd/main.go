@@ -26,21 +26,25 @@ func main() {
 		},
 	}
 
-	var deployCommand = cli.Command{
+	var (
+		DeployCommand = cli.Command{
 
-		Name:   "deploy",
-		Usage:  "manager deploy server",
-		Before: build.InitProject,
-		Subcommands: []*cli.Command{
+			Name:   "deploy",
+			Usage:  "manager deploy server",
+			Before: build.InitProject,
+			Subcommands: []*cli.Command{
 
-			&build.BuildCmd,
-			&build.PushCmd,
-			&kube.RestartCmd,
-		},
-	}
+				&build.BuildCmd,
+				&build.PushCmd,
+				&kube.RestartCmd,
+				&kube.GetDeploymentCmd,
+				&kube.CreateDeploymentCmd,
+			},
+		}
+	)
 	app.Commands = []*cli.Command{
 
-		&deployCommand,
+		&DeployCommand,
 	}
 	if err := app.Run(os.Args); err != nil {
 		log.Fatalln(err)
