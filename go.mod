@@ -12,7 +12,3 @@ require (
 	github.com/stretchr/testify v1.8.1 // indirect
 	golang.org/x/sys v0.6.0 // indirect
 )
-
-replace github.com/tiamxu/kit => ./
-
-replace github.com/tiamxu/kit/sql => ./sql
