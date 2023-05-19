@@ -4,6 +4,24 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+var (
+	BuildCmd = cli.Command{
+		Name:   "build",
+		Usage:  "build code and docker image",
+		Flags:  Flags,
+		Before: InitFlags,
+		Action: RunBuild,
+	}
+	PushCmd = cli.Command{
+
+		Name:   "push",
+		Usage:  "docker push image registry",
+		Flags:  Flags,
+		Before: InitFlags,
+		Action: RunPush,
+	}
+)
+
 // var DeployCommand = cli.Command{
 
 // 	Name:   "deploy",
@@ -29,21 +47,3 @@ import (
 // 		&kube.RestartCmd,
 // 	},
 // }
-
-var (
-	BuildCmd = cli.Command{
-		Name:   "build",
-		Usage:  "build code and docker image",
-		Flags:  Flags,
-		Before: InitFlags,
-		Action: RunBuild,
-	}
-	PushCmd = cli.Command{
-
-		Name:   "push",
-		Usage:  "docker push image registry",
-		Flags:  Flags,
-		Before: InitFlags,
-		Action: RunPush,
-	}
-)

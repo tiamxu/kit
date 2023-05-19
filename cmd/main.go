@@ -1,12 +1,16 @@
 package main
 
 import (
-	"a/kit/cmd/build"
-	"a/kit/cmd/kube"
 	"fmt"
 	"log"
 	"os"
 	"runtime"
+
+	"github.com/tiamxu/kit/build"
+
+	"github.com/tiamxu/kit/cmd/gitlab"
+	"github.com/tiamxu/kit/jenkins"
+	"github.com/tiamxu/kit/kube"
 
 	"github.com/urfave/cli/v2"
 )
@@ -41,10 +45,26 @@ func main() {
 				&kube.CreateDeploymentCmd,
 			},
 		}
+		JenkinsCommand = cli.Command{
+			Name:  "jks",
+			Usage: "manage jenkins cmd",
+			Subcommands: []*cli.Command{
+				&jenkins.CreateJobCmd,
+			},
+		}
+		GitlabCommand = cli.Command{
+			Name:  "git",
+			Usage: "manage gitlab cmd",
+			Subcommands: []*cli.Command{
+				&gitlab.GetProjectCmd,
+			},
+		}
 	)
 	app.Commands = []*cli.Command{
 
 		&DeployCommand,
+		&JenkinsCommand,
+		&GitlabCommand,
 	}
 	if err := app.Run(os.Args); err != nil {
 		log.Fatalln(err)

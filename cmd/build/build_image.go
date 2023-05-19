@@ -171,11 +171,10 @@ func loginAction(c *cli.Context) error {
 	)
 	if needSudo() {
 		loginCmd = exec.Command("sudo", "docker", "login",
-			"--username=xiaomengcorp", "--password=WtzUwhkm9KCoxMsQ3GRT",
+			"--username=root", "--password=123456",
 			"https://registry.cn-hangzhou.aliyuncs.com")
 	} else {
-		loginCmd = exec.Command("docker", "login", "--username=xiaomengcorp", "--password=WtzUwhkm9KCoxMsQ3GRT", "https://registry.cn-hangzhou.aliyuncs.com")
-
+		loginCmd = exec.Command("docker", "login", "--username=root", "--password=123456", "https://registry.cn-hangzhou.aliyuncs.com")
 	}
 	loginCmd.Stderr = &stderr
 	loginCmd.Stdout = &stdout
