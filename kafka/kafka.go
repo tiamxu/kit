@@ -2,91 +2,76 @@ package kafka
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
-	"github.com/segmentio/kafka-go"
+	"github.com/Shopify/sarama"
 )
 
-// KafkaProducer 封装了使用segmentio/kafka-go的Kafka生产者
+// KafkaProducer 封装了Kafka生产者
 type KafkaProducer struct {
-	writer *kafka.Writer
+	producer sarama.AsyncProducer
 }
 
 // NewKafkaProducer 创建一个新的Kafka生产者
-func NewKafkaProducer(brokers []string, topic string) (*KafkaProducer, error) {
-	// 创建Kafka writer配置
-	config := kafka.WriterConfig{
-		Brokers:  brokers,
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+func NewKafkaProducer(brokers []string) (*KafkaProducer, error) {
+	config := sarama.NewConfig()
+	// 发送完消息后需要 leader 和 follower 都确认
+	config.Producer.RequiredAcks = sarama.WaitForLocal
+	// 使用 Snappy 压缩
+	config.Producer.Compression = sarama.CompressionSnappy
+	// 每 500ms 刷新一次消息缓冲
+	config.Producer.Flush.Frequency = 500 * time.Millisecond
+	config.Producer.Return.Successes = true
+	producer, err := sarama.NewAsyncProducer(brokers, config)
+	if err != nil {
+		return nil, err
 	}
 
-	// 创建Kafka writer实例
-	writer := kafka.NewWriter(config)
-
 	p := &KafkaProducer{
-		writer: writer,
+		producer: producer,
 	}
 	return p, nil
 }
 
 // SendMessage 发送消息到Kafka
-func (p *KafkaProducer) SendMessage(key, value []byte) error {
-	// 创建消息
-	message := kafka.Message{
-		Key:   key,
-		Value: value,
+func (p *KafkaProducer) SendMessage(topic string, key, value []byte) {
+	message := &sarama.ProducerMessage{
+		Topic: topic,
+		Key:   sarama.ByteEncoder(key),
+		Value: sarama.ByteEncoder(value),
 	}
-
-	// 发送消息并处理可能的错误
-	err := p.writer.WriteMessages(context.Background(), message)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	p.producer.Input() <- message
 }
 
-// KafkaConsumer 封装了使用segmentio/kafka-go的Kafka消费者
+// KafkaConsumer 封装了Kafka消费者
 type KafkaConsumer struct {
-	reader *kafka.Reader
+	topic     string
+	partition int32
+	consumer  sarama.ConsumerGroup
 }
 
 // NewKafkaConsumer 创建一个新的Kafka消费者
-func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaConsumer, error) {
-	// 创建Kafka reader配置
-	config := kafka.ReaderConfig{
-		Brokers:        brokers,
-		Topic:          topic,
-		GroupID:        groupID,
-		MinBytes:       10e3,
-		MaxBytes:       10e6, //10MB
-		StartOffset:    kafka.LastOffset,
-		CommitInterval: time.Second, // 每秒刷新一次提交给 Kafka
+func NewKafkaConsumer(brokers []string, group, topic string, partition int32) (*KafkaConsumer, error) {
+	config := sarama.NewConfig()
+	consumerGroup, err := sarama.NewConsumerGroup(brokers, group, config)
+	if err != nil {
+		return nil, err
 	}
-
-	// 创建Kafka reader实例
-	reader := kafka.NewReader(config)
-
 	c := &KafkaConsumer{
-		reader: reader,
+		topic:     topic,
+		consumer:  consumerGroup,
+		partition: partition,
 	}
 	return c, nil
 }
 
 // ConsumeMessage 从Kafka消费消息
-func (c *KafkaConsumer) ConsumeMessage() {
+func (c *KafkaConsumer) ConsumeMessage(handler sarama.ConsumerGroupHandler) {
+	defer c.consumer.Close()
 	for {
-		// 读取消息并处理可能的错误
-		message, err := c.reader.ReadMessage(context.Background())
-		if err != nil {
-			log.Printf("found error from kafka reader %v", err)
-			continue
+		if err := c.consumer.Consume(context.Background(), []string{c.topic}, handler); err != nil {
+			log.Printf("found error from kafka group consumer %v", err)
 		}
-
-		// 打印接收到的消息内容
-		fmt.Printf("Received message: Key: %s, Value: %s\n", string(message.Key), string(message.Value))
 	}
 }
