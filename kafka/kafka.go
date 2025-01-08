@@ -56,6 +56,31 @@ func NewKafkaProducer(cfg KafkaConfig) (*KafkaProducer, error) {
 		BatchSize:    cfg.BatchSize,
 	}
 
+	// 检查并创建topic
+	conn, err := kafka.DialContext(context.Background(), "tcp", cfg.Brokers[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to kafka: %v", err)
+	}
+	defer conn.Close()
+
+	// 检查topic是否存在
+	partitions, err := conn.ReadPartitions(cfg.Topic)
+	if err != nil || len(partitions) == 0 {
+		// 创建topic
+		topicConfigs := []kafka.TopicConfig{
+			{
+				Topic:             cfg.Topic,
+				NumPartitions:     1,
+				ReplicationFactor: 1,
+			},
+		}
+		
+		err = conn.CreateTopics(topicConfigs...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create topic: %v", err)
+		}
+	}
+
 	// 创建Kafka writer实例
 	writer := kafka.NewWriter(config)
 
