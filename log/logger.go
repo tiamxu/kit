@@ -1,6 +1,7 @@
 package log
 
 import (
+	"context"
 	"os"
 	"sync"
 	"time"
@@ -68,21 +69,74 @@ func Init(cfg *Config) error {
 
 type Fields = logrus.Fields
 
-var WithFields = _defaultLogger.WithFields
-var WithContext = _defaultLogger.WithContext
-var Traceln = _defaultLogger.Traceln
-var Tracef = _defaultLogger.Tracef
-var Debugf = _defaultLogger.Debugf
-var Debugln = _defaultLogger.Debugln
-var Printf = _defaultLogger.Printf
-var Println = _defaultLogger.Println
-var Infof = _defaultLogger.Infof
-var Infoln = _defaultLogger.Infoln
-var Warnf = _defaultLogger.Warnf
-var Warnln = _defaultLogger.Warnln
-var Errorf = _defaultLogger.Errorf
-var Errorln = _defaultLogger.Errorln
-var Panicf = _defaultLogger.Panicf
-var Paincln = _defaultLogger.Panicln
-var Fatalf = _defaultLogger.Fatalf
-var Fatalln = _defaultLogger.Fatalln
+func WithFields(fields Fields) *logrus.Entry {
+	return _defaultLogger.WithFields(fields)
+}
+
+func WithContext(ctx context.Context) *logrus.Entry {
+	return _defaultLogger.WithContext(ctx)
+}
+
+func Traceln(args ...interface{}) {
+	_defaultLogger.Traceln(args...)
+}
+
+func Tracef(format string, args ...interface{}) {
+	_defaultLogger.Tracef(format, args...)
+}
+
+func Debugf(format string, args ...interface{}) {
+	_defaultLogger.Debugf(format, args...)
+}
+
+func Debugln(args ...interface{}) {
+	_defaultLogger.Debugln(args...)
+}
+
+func Printf(format string, args ...interface{}) {
+	_defaultLogger.Printf(format, args...)
+}
+
+func Println(args ...interface{}) {
+	_defaultLogger.Println(args...)
+}
+
+func Infof(format string, args ...interface{}) {
+	_defaultLogger.Infof(format, args...)
+}
+
+func Infoln(args ...interface{}) {
+	_defaultLogger.Infoln(args...)
+}
+
+func Warnf(format string, args ...interface{}) {
+	_defaultLogger.Warnf(format, args...)
+}
+
+func Warnln(args ...interface{}) {
+	_defaultLogger.Warnln(args...)
+}
+
+func Errorf(format string, args ...interface{}) {
+	_defaultLogger.Errorf(format, args...)
+}
+
+func Errorln(args ...interface{}) {
+	_defaultLogger.Errorln(args...)
+}
+
+func Panicf(format string, args ...interface{}) {
+	_defaultLogger.Panicf(format, args...)
+}
+
+func Panicln(args ...interface{}) {
+	_defaultLogger.Panicln(args...)
+}
+
+func Fatalf(format string, args ...interface{}) {
+	_defaultLogger.Fatalf(format, args...)
+}
+
+func Fatalln(args ...interface{}) {
+	_defaultLogger.Fatalln(args...)
+}
