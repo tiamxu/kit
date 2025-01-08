@@ -1,62 +1,69 @@
 package log
 
 import (
-	"bytes"
-	"fmt"
 	"os"
-	"strings"
+	"sync"
 	"time"
 
+	"github.com/natefinch/lumberjack"
 	"github.com/sirupsen/logrus"
 )
 
-var _defaultLogger = logrus.New()
-
-const defaultTimestampFormat = time.RFC3339
-
-type Formatter struct {
-	TimestampFormat string
-}
-
-func (f *Formatter) Format(entry *logrus.Entry) ([]byte, error) {
-	data := make(Fields)
-	for k, v := range entry.Data {
-		data[k] = v
-	}
-	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
-		b = &bytes.Buffer{}
-	}
-
-	timestampFormat := f.TimestampFormat
-	if timestampFormat == "" {
-		timestampFormat = defaultTimestampFormat
-	}
-
-	var (
-		levelStr = strings.ToUpper(entry.Level.String())
-		timeStr  = entry.Time.Format(timestampFormat)
-	)
-
-	_, err := fmt.Fprintf(b, "%s %s %s\n", levelStr, timeStr, entry.Message)
-	if err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
-}
+var (
+	_defaultLogger *logrus.Logger
+	once           sync.Once
+)
 
 func DefaultLogger() *logrus.Logger {
+	once.Do(func() {
+		_defaultLogger = logrus.New()
+		_defaultLogger.SetFormatter(&logrus.JSONFormatter{
+			TimestampFormat: time.RFC3339Nano,
+		})
+		_defaultLogger.SetOutput(os.Stdout)
+		_defaultLogger.SetLevel(logrus.TraceLevel)
+		_defaultLogger.SetReportCaller(true)
+	})
 	return _defaultLogger
 }
-func init() {
-	_defaultLogger.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat: time.RFC3339Nano,
-	})
-	_defaultLogger.SetOutput(os.Stdout)
-	_defaultLogger.SetLevel(logrus.TraceLevel)
-	_defaultLogger.SetReportCaller(true)
+
+func Init(cfg *Config) error {
+	logger := DefaultLogger()
+
+	// Set log level
+	level := logrus.Level(cfg.LogLevel)
+	logger.SetLevel(level)
+
+	// Set output
+	switch cfg.Type {
+	case "file":
+		fileLogger := &lumberjack.Logger{
+			Filename:   cfg.LogFilePath + "/" + cfg.LogFileName,
+			MaxSize:    int(cfg.MaxSize),
+			MaxBackups: cfg.MaxBackups,
+			MaxAge:     cfg.MaxAge,
+			Compress:   true,
+		}
+		logger.SetOutput(fileLogger)
+	case "kafka":
+		// TODO: implement kafka output
+		logger.SetOutput(os.Stdout)
+	default:
+		logger.SetOutput(os.Stdout)
+	}
+
+	// Set formatter based on encoding
+	if cfg.Encoding == "text" {
+		logger.SetFormatter(&logrus.TextFormatter{
+			TimestampFormat: time.RFC3339Nano,
+		})
+	} else {
+		logger.SetFormatter(&logrus.JSONFormatter{
+			TimestampFormat: time.RFC3339Nano,
+		})
+	}
+
+	return nil
 }
 
 type Fields = logrus.Fields
