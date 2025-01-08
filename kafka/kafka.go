@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 )
 
 // KafkaProducer 封装了Kafka生产者

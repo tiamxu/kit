@@ -35,7 +35,7 @@ func Init(cfg *Config) error {
 	if level, err := logrus.ParseLevel(cfg.LogLevel); err != nil {
 		return err
 	} else {
-		DefaultLogger().SetLevel(level)
+		logger.SetLevel(level)
 	}
 	// level := logrus.Level(cfg.LogLevel)
 	// logger.SetLevel(level)
@@ -52,8 +52,9 @@ func Init(cfg *Config) error {
 		}
 		logger.SetOutput(fileLogger)
 	case "kafka":
-		// TODO: implement kafka output
-		logger.SetOutput(os.Stdout)
+		formatter, writer := setupKafkaOutput(cfg)
+		logger.SetFormatter(formatter)
+		logger.SetOutput(writer)
 	default:
 		logger.SetOutput(os.Stdout)
 	}
@@ -62,6 +63,7 @@ func Init(cfg *Config) error {
 	if cfg.Format == "text" {
 		logger.SetFormatter(&logrus.TextFormatter{
 			TimestampFormat: time.RFC3339Nano,
+			DisableColors:   true,
 		})
 	} else {
 		logger.SetFormatter(&logrus.JSONFormatter{
