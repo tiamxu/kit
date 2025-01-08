@@ -23,7 +23,7 @@ func DefaultLogger() *logrus.Logger {
 		})
 		_defaultLogger.SetOutput(os.Stdout)
 		_defaultLogger.SetLevel(logrus.TraceLevel)
-		_defaultLogger.SetReportCaller(true)
+		// _defaultLogger.SetReportCaller(true)
 	})
 	return _defaultLogger
 }
@@ -32,8 +32,13 @@ func Init(cfg *Config) error {
 	logger := DefaultLogger()
 
 	// Set log level
-	level := logrus.Level(cfg.LogLevel)
-	logger.SetLevel(level)
+	if level, err := logrus.ParseLevel(cfg.LogLevel); err != nil {
+		return err
+	} else {
+		DefaultLogger().SetLevel(level)
+	}
+	// level := logrus.Level(cfg.LogLevel)
+	// logger.SetLevel(level)
 
 	// Set output
 	switch cfg.Type {
@@ -54,7 +59,7 @@ func Init(cfg *Config) error {
 	}
 
 	// Set formatter based on encoding
-	if cfg.Encoding == "text" {
+	if cfg.Format == "text" {
 		logger.SetFormatter(&logrus.TextFormatter{
 			TimestampFormat: time.RFC3339Nano,
 		})

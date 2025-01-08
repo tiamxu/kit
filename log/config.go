@@ -9,8 +9,8 @@ type Config struct {
 	MaxBackups  int    `yaml:"max_backup"` //最大文件个数
 	MaxAge      int    `yaml:"max_age"`    //最大天数
 	// 日志级别
-	LogLevel int `yaml:"log_level"`
+	LogLevel string `yaml:"log_level"`
 	//日志格式: text,json
-	Encoding string `yaml:"encoding"`
-	Topic    string `yaml:"topic"`
+	Format string `yaml:"format"`
+	Topic  string `yaml:"topic"`
 }
