@@ -41,52 +41,6 @@ func DefaultLogger() *logrus.Logger {
 	return _defaultLogger
 }
 
-// func InitLog(cfg *Config) error {
-// 	logger := DefaultLogger()
-
-// 	// Set log level
-// 	if level, err := logrus.ParseLevel(cfg.Level); err != nil {
-// 		return err
-// 	} else {
-// 		logger.SetLevel(level)
-// 	}
-// 	// level := logrus.Level(cfg.LogLevel)
-// 	// logger.SetLevel(level)
-
-// 	// Set output
-// 	switch cfg.Type {
-// 	case "file":
-// 		fileLogger := &lumberjack.Logger{
-// 			Filename:   cfg.FilePath + "/" + cfg.FileName,
-// 			MaxSize:    int(cfg.MaxSize),
-// 			MaxBackups: cfg.MaxBackups,
-// 			MaxAge:     cfg.MaxAge,
-// 			Compress:   true,
-// 		}
-// 		logger.SetOutput(fileLogger)
-// 	// case "kafka":
-// 	// 	formatter, writer := setupKafkaOutput(cfg)
-// 	// 	logger.SetFormatter(formatter)
-// 	// 	logger.SetOutput(writer)
-// 	default:
-// 		logger.SetOutput(os.Stdout)
-// 	}
-
-// 	// Set formatter based on encoding
-// 	if cfg.Format == "text" {
-// 		logger.SetFormatter(&logrus.TextFormatter{
-// 			TimestampFormat: time.RFC3339Nano,
-// 			DisableColors:   true,
-// 		})
-// 	} else {
-// 		logger.SetFormatter(&logrus.JSONFormatter{
-// 			TimestampFormat: time.RFC3339Nano,
-// 		})
-// 	}
-
-// 	return nil
-// }
-
 type Fields = logrus.Fields
 
 func WithFields(fields Fields) *logrus.Entry {

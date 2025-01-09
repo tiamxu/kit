@@ -91,6 +91,14 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	return p, nil
 }
 
+// Close 关闭Kafka生产者
+func (p *KafkaProducer) Close() error {
+	if p.writer != nil {
+		return p.writer.Close()
+	}
+	return nil
+}
+
 // SendMessage 发送消息到Kafka
 func (p *KafkaProducer) SendMessage(key, value []byte) error {
 	// 创建消息
