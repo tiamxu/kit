@@ -16,19 +16,20 @@ package log
 // }
 
 type Config struct {
-	LogLevel    string `json:"log_level"`
-	LogFilePath string `json:"log_file_path"`
-	LogFileName string `json:"log_file_name"`
+	LogLevel    string `json:"level"`
+	LogFilePath string `json:"file_path"`
+	LogFileName string `json:"ile_name"`
 	MaxSize     int    `json:"max_size"`
 	MaxBackups  int    `json:"max_backups"`
 	MaxAge      int    `json:"max_age"`
 	Type        string `json:"type"`
 	Format      string `json:"format"`
-	KafkaConfig struct {
-		Brokers    []string `json:"brokers"`
-		Topic      string   `json:"topic"`
-		MaxRetries int      `json:"max_retries"`
-	} `json:"kafka_config"`
+	KafkaConfig
+	// KafkaConfig struct {
+	// 	Brokers    []string `json:"brokers"`
+	// 	Topic      string   `json:"topic"`
+	// 	MaxRetries int      `json:"max_retries"`
+	// } `json:"kafka_config"`
 }
 
 type KafkaConfig struct {

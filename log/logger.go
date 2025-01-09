@@ -30,7 +30,7 @@ func DefaultLogger() *logrus.Logger {
 	return _defaultLogger
 }
 
-func Init(cfg *Config) error {
+func InitLog(cfg *Config) error {
 	logger := DefaultLogger()
 
 	// Set log level
@@ -75,20 +75,6 @@ func Init(cfg *Config) error {
 
 	return nil
 }
-
-type Formatter struct {
-	// TimestampFormat to use for display when a full timestamp is printed
-	TimestampFormat string
-}
-
-// func init() {
-// 	_defaultLogger.SetFormatter(&Formatter{
-// 		TimestampFormat: time.RFC3339Nano,
-// 	})
-
-// 	_defaultLogger.SetOutput(os.Stdout)
-// 	_defaultLogger.SetLevel(logrus.TraceLevel)
-// }
 
 type Fields = logrus.Fields
 
