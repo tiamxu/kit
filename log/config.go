@@ -18,7 +18,7 @@ package log
 type Config struct {
 	LogLevel    string `json:"level"`
 	LogFilePath string `json:"file_path"`
-	LogFileName string `json:"ile_name"`
+	LogFileName string `json:"file_name"`
 	MaxSize     int    `json:"max_size"`
 	MaxBackups  int    `json:"max_backups"`
 	MaxAge      int    `json:"max_age"`
