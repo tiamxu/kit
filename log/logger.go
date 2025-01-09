@@ -10,14 +10,15 @@ import (
 )
 
 type Config struct {
-	Level      string `json:"level"`
-	FilePath   string `json:"file_path"`
-	FileName   string `json:"file_name"`
-	MaxSize    int    `json:"max_size"`
-	MaxBackups int    `json:"max_backups"`
-	MaxAge     int    `json:"max_age"`
-	Type       string `json:"type"`
-	Format     string `json:"format"`
+	Level      string `yaml:"level"`
+	FilePath   string `yaml:"file_path"`
+	FileName   string `yaml:"file_name"`
+	MaxSize    int    `yaml:"max_size"`    //最大存储空间单位（MB）
+	MaxBackups int    `yaml:"max_backups"` //最大文件个数
+	MaxAge     int    `yaml:"max_age"`     //最大天数
+	Compress   bool   `yaml:"compress"`
+	Type       string `yaml:"type"`   //日志存储类型:stdout、file、kafka
+	Format     string `yaml:"format"` //日志格式: text,json
 }
 
 var (
