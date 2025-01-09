@@ -1,11 +1,8 @@
 package log
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,39 +28,6 @@ func DefaultLogger() *logrus.Logger {
 		// _defaultLogger.SetReportCaller(true)
 	})
 	return _defaultLogger
-}
-func (f *Formatter) Format(entry *logrus.Entry) ([]byte, error) {
-	data := make(Fields)
-	for k, v := range entry.Data {
-		data[k] = v
-	}
-	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
-		b = &bytes.Buffer{}
-	}
-
-	timestampFormat := f.TimestampFormat
-	if timestampFormat == "" {
-		timestampFormat = defaultTimestampFormat
-	}
-
-	var (
-		levelStr  = strings.ToUpper(entry.Level.String())
-		timeStr   = entry.Time.Format(timestampFormat)
-		requestId string
-	)
-	if entry.Context != nil {
-		if val := entry.Context.Value(strings.ToLower("x-request-id")); val != nil {
-			requestId = val.(string)
-		}
-	}
-	_, err := fmt.Fprintf(b, "%s %s %s %s\n", levelStr, timeStr, entry.Message, requestId)
-	if err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
 }
 
 func Init(cfg *Config) error {
@@ -117,14 +81,14 @@ type Formatter struct {
 	TimestampFormat string
 }
 
-func init() {
-	_defaultLogger.SetFormatter(&Formatter{
-		TimestampFormat: time.RFC3339Nano,
-	})
+// func init() {
+// 	_defaultLogger.SetFormatter(&Formatter{
+// 		TimestampFormat: time.RFC3339Nano,
+// 	})
 
-	_defaultLogger.SetOutput(os.Stdout)
-	_defaultLogger.SetLevel(logrus.TraceLevel)
-}
+// 	_defaultLogger.SetOutput(os.Stdout)
+// 	_defaultLogger.SetLevel(logrus.TraceLevel)
+// }
 
 type Fields = logrus.Fields
 
