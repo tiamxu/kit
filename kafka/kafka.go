@@ -12,20 +12,20 @@ import (
 // KafkaProducer 封装了使用segmentio/kafka-go的Kafka生产者
 type KafkaProducer struct {
 	writer *kafka.Writer
-	config KafkaConfig
+	config *Config
 }
 
-type KafkaConfig struct {
-	Brokers       []string
-	Topic         string
-	MaxRetries    int           // 最大重试次数
-	RetryInterval time.Duration // 重试间隔
-	BatchTimeout  time.Duration // 批量提交超时
-	BatchSize     int           // 批量大小
+type Config struct {
+	Brokers       []string      `yaml:"brokers"`
+	Topic         string        `yaml:"topic"`
+	MaxRetries    int           `yaml:"max_retries"`    // 最大重试次数
+	RetryInterval time.Duration `yaml:"retry_interval"` // 重试间隔
+	BatchTimeout  time.Duration `yaml:"batch_timeout"`  // 批量提交超时
+	BatchSize     int           `yaml:"batch_size"`     // 批量大小
 }
 
 // NewKafkaProducer 创建一个新的Kafka生产者
-func NewKafkaProducer(cfg KafkaConfig) (*KafkaProducer, error) {
+func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	if len(cfg.Brokers) == 0 {
 		return nil, fmt.Errorf("brokers cannot be empty")
 	}
@@ -74,7 +74,7 @@ func NewKafkaProducer(cfg KafkaConfig) (*KafkaProducer, error) {
 				ReplicationFactor: 1,
 			},
 		}
-		
+
 		err = conn.CreateTopics(topicConfigs...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create topic: %v", err)

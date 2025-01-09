@@ -30,3 +30,9 @@ type Config struct {
 		MaxRetries int      `json:"max_retries"`
 	} `json:"kafka_config"`
 }
+
+type KafkaConfig struct {
+	Brokers    []string `json:"kafka_brokers"`
+	Topic      string   `json:"topic"`
+	MaxRetries int      `json:"max_retries"`
+}

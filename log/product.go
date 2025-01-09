@@ -12,14 +12,14 @@ var kafkaProducer *kafka.KafkaProducer
 
 func setupKafkaOutput(cfg *Config) (logrus.Formatter, *kafkaWriter) {
 	// 初始化kafka producer
-	kafkaCfg := kafka.KafkaConfig{
+	kafkaCfg := kafka.Config{
 		Brokers:    cfg.KafkaConfig.Brokers,
 		Topic:      cfg.KafkaConfig.Topic,
 		MaxRetries: cfg.KafkaConfig.MaxRetries,
 	}
 
 	var err error
-	kafkaProducer, err = kafka.NewKafkaProducer(kafkaCfg)
+	kafkaProducer, err = kafka.NewKafkaProducer(&kafkaCfg)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to init kafka producer: %v", err))
 	}
