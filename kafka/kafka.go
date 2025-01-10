@@ -49,11 +49,12 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 
 	// 创建Kafka writer配置
 	config := kafka.WriterConfig{
-		Brokers:      cfg.Brokers,
-		Topic:        cfg.Topic,
+		Brokers: cfg.Brokers,
+		// Topic:        cfg.Topic,
 		Balancer:     &kafka.LeastBytes{},
 		BatchTimeout: cfg.BatchTimeout,
 		BatchSize:    cfg.BatchSize,
+		Async:        true,
 	}
 
 	// 检查并创建topic
@@ -100,9 +101,10 @@ func (p *KafkaProducer) Close() error {
 }
 
 // SendMessage 发送消息到Kafka
-func (p *KafkaProducer) SendMessage(key, value []byte) error {
+func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
 	// 创建消息
 	message := kafka.Message{
+		Topic: topic,
 		Key:   key,
 		Value: value,
 	}
