@@ -1,8 +1,9 @@
 package sql
 
 import (
-	_ "database/sql"
-	"fmt"
+	"database/sql"
+	// _ "database/sql"
+
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go"
@@ -26,7 +27,7 @@ func Connect(dbConfig *Config) (*DB, error) {
 	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
 	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
 	db.SetConnMaxLifetime(time.Duration(dbConfig.ConnMaxLifetime) * time.Second)
-	fmt.Println(dbConfig)
+	// fmt.Println(dbConfig)
 	return &DB{
 		DB:       db,
 		dbConfig: dbConfig,
@@ -50,6 +51,7 @@ func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err erro
 	if fn == nil {
 		return
 	}
+	
 	var _tx *sqlx.Tx
 	if len(tx) > 0 {
 		_tx = tx[0]
@@ -70,3 +72,35 @@ func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err erro
 	err = fn(_tx)
 	return err
 }
+
+var ErrNoRows = sql.ErrNoRows
+
+// IsNoRows is the data exist or not.
+func IsNoRows(err error) bool {
+	return ErrNoRows == err
+}
+
+// PreDB preset *DB
+type PreDB struct {
+	*DB
+	inited bool
+}
+
+// NewPreDB creates a unconnected *DB
+func NewPreDB() *PreDB {
+	return &PreDB{
+		DB: &DB{},
+	}
+}
+
+// Init init
+func (p *PreDB) Init(dbConfig *Config) error {
+	db, err := Connect(dbConfig)
+	if err != nil {
+		return err
+	}
+	p.inited = true
+	p.DB = db
+	return nil
+}
+

@@ -1,4 +1,4 @@
-package kafka
+package v1
 
 import (
 	"context"
@@ -27,7 +27,6 @@ func NewKafkaProducer(brokers []string) (*KafkaProducer, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	p := &KafkaProducer{
 		producer: producer,
 	}
