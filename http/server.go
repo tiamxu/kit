@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/tiamxu/kit/log"
 )
@@ -24,6 +25,18 @@ type GinServerConfig struct {
 	StaticDir string `yaml:"static_dir"`
 	// BodyLimit body大小限制
 	BodyLimit int64 `yaml:"body_limit" default:"10485760"` // 10MB
+	// CORSConfig 跨域配置
+	CORSConfig *CORSConfig `yaml:"cors"`
+}
+
+// CORSConfig 跨域配置
+type CORSConfig struct {
+	AllowOrigins     []string      `yaml:"allow_origins"`
+	AllowMethods     []string      `yaml:"allow_methods"`
+	AllowHeaders     []string      `yaml:"allow_headers"`
+	ExposeHeaders    []string      `yaml:"expose_headers"`
+	AllowCredentials bool          `yaml:"allow_credentials"`
+	MaxAge           time.Duration `yaml:"max_age"`
 }
 
 var DefaultAccessLogFormat = `[GIN] ${time} | ${status} | ${latency} | ${client_ip} | ${method} ${path} ${error}`
@@ -55,7 +68,30 @@ func NewGin(cfg GinServerConfig) *gin.Engine {
 	// 设置body大小限制
 	router.MaxMultipartMemory = cfg.BodyLimit
 
+	// 添加CORS中间件
+	if cfg.CORSConfig != nil {
+		router.Use(corsMiddleware(cfg.CORSConfig))
+	} else {
+		router.Use(corsMiddleware(&CORSConfig{
+			AllowOrigins: []string{"*"},
+			AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		}))
+	}
+
 	return router
+}
+
+// corsMiddleware CORS中间件
+func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
+	return cors.New(cors.Config{
+		AllowOrigins:     config.AllowOrigins,
+		AllowMethods:     config.AllowMethods,
+		AllowHeaders:     config.AllowHeaders,
+		ExposeHeaders:    config.ExposeHeaders,
+		AllowCredentials: config.AllowCredentials,
+		MaxAge:           config.MaxAge,
+	})
 }
 
 func logFormatter(format string) gin.LogFormatter {
