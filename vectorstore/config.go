@@ -32,3 +32,11 @@ type IndexConfig struct {
 	MetricType string `yaml:"metric_type"`
 	NList      int    `yaml:"nlist"`
 }
+
+type QdrantConfig struct {
+	Address    string `yaml:"address"`
+	Host       string `yaml:"host"`
+	Port       int    `yaml:"port"`
+	Collection string `yaml:"collection"`
+	ApiKey     string `yaml:"api_key"`
+}

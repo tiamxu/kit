@@ -10,7 +10,8 @@ import (
 type VectorStore interface {
 	// Initialize 初始化向量存储
 	Initialize(ctx context.Context) error
-
+	//创建自定义集合
+	CreateCollection(ctx context.Context) error
 	// AddDocuments 添加文档到向量存储
 	AddDocuments(ctx context.Context, docs []schema.Document) error
 

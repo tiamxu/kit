@@ -74,6 +74,61 @@ func (m *MilvusStore) Initialize(ctx context.Context) error {
 	return nil
 }
 
+func (m *MilvusStore) CreateCollection(ctx context.Context) error {
+	// Create Milvus client
+	milvusClient, err := client.NewClient(ctx, client.Config{
+		Address: m.cfg.Address,
+		DBName:  m.cfg.DBName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create Milvus client: %w", err)
+	}
+	// Define collection schema
+	schema := &entity.Schema{
+		CollectionName: m.cfg.Collection,
+		AutoID:         true,
+		Fields: []*entity.Field{
+			{
+				Name:       "id",
+				DataType:   entity.FieldTypeInt64,
+				PrimaryKey: true,
+				AutoID:     true,
+			},
+			{
+				Name:     "text",
+				DataType: entity.FieldTypeVarChar,
+				TypeParams: map[string]string{
+					"max_length": "65535",
+				},
+			},
+			{
+				Name:     "meta",
+				DataType: entity.FieldTypeJSON,
+				TypeParams: map[string]string{
+					"max_length": "65535",
+				},
+			},
+			{
+				Name:     "vector",
+				DataType: entity.FieldTypeFloatVector,
+				TypeParams: map[string]string{
+					"dim": "768",
+				},
+			},
+		},
+	}
+	has, err := milvusClient.HasCollection(context.Background(), m.cfg.Collection)
+	if err != nil {
+		return fmt.Errorf("failed to check collection exists: %w", err)
+	}
+	if !has {
+		err = milvusClient.CreateCollection(ctx, schema, 1) // 2 shards
+		if err != nil {
+			return fmt.Errorf("failed to create collection: %w", err)
+		}
+	}
+	return nil
+}
 func (m *MilvusStore) AddDocuments(ctx context.Context, docs []schema.Document) error {
 	_, err := m.store.AddDocuments(ctx, docs)
 	return err
