@@ -1,31 +1,30 @@
 package llm
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/tmc/langchaingo/embeddings"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/ollama"
+	"github.com/tmc/langchaingo/llms/openai"
 )
 
 // LLMType defines supported LLM types
 type LLMType string
 
 const (
-	Ollama   LLMType = "ollama"
-	DeepSeek LLMType = "deepseek"
+	Ollama LLMType = "ollama"
+	Aliyun LLMType = "aliyun"
 )
 
 // Config contains configuration for all supported LLMs
 type Config struct {
-	Type          LLMType `yaml:"type"`
-	OllamaConfig  `yaml:",inline"`
-	DeepSeekConfig `yaml:",inline"`
+	ModelType LLMType      `yaml:"model_type"`
+	Ollama    OllamaConfig `yaml:"ollama"`
+	Aliyun    AliyunConfig `yaml:"aliyun"`
 }
 
 // OllamaConfig contains configuration for Ollama LLM
@@ -36,59 +35,58 @@ type OllamaConfig struct {
 	Temperature   float64 `yaml:"temperature"`
 }
 
-// DeepSeekConfig contains configuration for DeepSeek LLM
-type DeepSeekConfig struct {
-	APIKey        string  `yaml:"api_key"`
-	Model         string  `yaml:"model"`
-	BaseURL       string  `yaml:"base_url"`
-	Timeout       int     `yaml:"timeout"`
-	Temperature   float64 `yaml:"temperature"`
-	MaxTokens     int     `yaml:"max_tokens"`
+type AliyunConfig struct {
+	BaseURL        string `yaml:"base_url"`
+	APIKey         string `yaml:"api_key"`
+	LLMModel       string `yaml:"llm_model"`
+	EmbeddingModel string `yaml:"embedding_model"`
+}
+
+// GetAPIKey returns API key from environment variable if set, otherwise from config
+func (c *AliyunConfig) GetAPIKey() string {
+	if apiKey := os.Getenv("ALIYUN_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return c.APIKey
 }
 
 // ModelService provides unified interface for all LLMs
-type ModelService struct {
-	llm      llms.Model
-	embedder embeddings.Embedder
-}
+// type ModelService struct {
+// 	llm      llms.Model
+// 	embedder embeddings.Embedder
+// }
 
-func NewModelService() *ModelService {
-	return &ModelService{}
-}
-
-func (ms *ModelService) Generate(ctx context.Context, prompt string) (string, error) {
-	result, err := ms.llm.GenerateContent(ctx, []llms.MessageContent{
-		{
-			Role:  llms.ChatMessageTypeHuman,
-			Parts: []llms.ContentPart{llms.TextPart(prompt)},
-		},
-	}, llms.WithTemperature(0.7), llms.WithMaxTokens(2048))
-	if err != nil {
-		return "", err
-	}
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
-	}
-	return result.Choices[0].Content, nil
-}
+// func NewModelService() *ModelService {
+// 	return &ModelService{}
+// }
 
 // NewModels initializes the appropriate LLM based on config
 func NewModels(cfg *Config) (llms.Model, embeddings.Embedder, error) {
-	switch cfg.Type {
+	switch cfg.ModelType {
 	case Ollama:
-		return NewOllamaModels(&cfg.OllamaConfig)
-	case DeepSeek:
-		return NewDeepSeekModels(&cfg.DeepSeekConfig)
+		return NewOllamaModels(&cfg.Ollama)
+	case Aliyun:
+		return NewAliyunModels(&cfg.Aliyun)
 	default:
-		return nil, nil, fmt.Errorf("unsupported LLM type: %s", cfg.Type)
+		return nil, nil, fmt.Errorf("unsupported LLM type: %s", cfg.ModelType)
 	}
 }
 
 // NewOllamaModels initializes Ollama LLM and embedder
 func NewOllamaModels(cfg *OllamaConfig) (llms.Model, embeddings.Embedder, error) {
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  true,
+			MaxIdleConnsPerHost: 10,
+		},
+	}
 	llm, err := ollama.New(
 		ollama.WithModel(cfg.LLMModel),
 		ollama.WithServerURL(cfg.Address),
+		ollama.WithHTTPClient(httpClient),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize LLM: %w", err)
@@ -110,166 +108,32 @@ func NewOllamaModels(cfg *OllamaConfig) (llms.Model, embeddings.Embedder, error)
 	return llm, embedder, nil
 }
 
-// NewDeepSeekModels initializes DeepSeek LLM and embedder
-func NewDeepSeekModels(cfg *DeepSeekConfig) (llms.Model, embeddings.Embedder, error) {
-	client := &http.Client{
-		Timeout: time.Duration(cfg.Timeout) * time.Second,
+func NewAliyunModels(cfg *AliyunConfig) (llms.Model, embeddings.Embedder, error) {
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  true,
+			MaxIdleConnsPerHost: 10,
+		},
 	}
 
-	llm := &DeepSeekLLM{
-		client:  client,
-		apiKey:  cfg.APIKey,
-		baseURL: cfg.BaseURL,
-		model:   cfg.Model,
-		timeout: time.Duration(cfg.Timeout) * time.Second,
+	llm, err := openai.New(
+		openai.WithBaseURL(cfg.BaseURL),
+		openai.WithToken(cfg.GetAPIKey()),
+		openai.WithModel(cfg.LLMModel),
+		openai.WithEmbeddingModel(cfg.EmbeddingModel),
+		openai.WithHTTPClient(httpClient),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("初始化失败 Aliyun LLM: %w", err)
 	}
 
 	embedder, err := embeddings.NewEmbedder(llm)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create DeepSeek embedder: %w", err)
+		return nil, nil, fmt.Errorf("创建失败 embedder: %w", err)
 	}
 
 	return llm, embedder, nil
-}
-
-// DeepSeekLLM implements the DeepSeek API
-type DeepSeekLLM struct {
-	client    *http.Client
-	apiKey    string
-	baseURL   string
-	model     string
-	timeout   time.Duration
-}
-
-func (ds *DeepSeekLLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
-	result, err := ds.GenerateContent(ctx, []llms.MessageContent{
-		{
-			Role:  llms.ChatMessageTypeHuman,
-			Parts: []llms.ContentPart{llms.TextPart(prompt)},
-		},
-	}, options...)
-	if err != nil {
-		return "", err
-	}
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
-	}
-	return result.Choices[0].Content, nil
-}
-
-func (ds *DeepSeekLLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
-	reqBody := map[string]interface{}{
-		"model":       ds.model,
-		"messages":    messages,
-		"temperature": 0.7,
-		"max_tokens":  2048,
-	}
-
-	reqBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", ds.baseURL+"/v1/chat/completions", bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ds.apiKey)
-
-	resp, err := ds.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var response struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if response.Error.Message != "" {
-		return nil, fmt.Errorf("api error: %s", response.Error.Message)
-	}
-
-	if len(response.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
-	}
-
-	return &llms.ContentResponse{
-		Choices: []*llms.ContentChoice{
-			{
-				Content: response.Choices[0].Message.Content,
-			},
-		},
-	}, nil
-}
-
-func (ds *DeepSeekLLM) CreateEmbedding(ctx context.Context, texts []string) ([][]float32, error) {
-	reqBody := map[string]interface{}{
-		"model": ds.model,
-		"input": texts,
-	}
-
-	reqBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", ds.baseURL+"/v1/embeddings", bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ds.apiKey)
-
-	resp, err := ds.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var response struct {
-		Data []struct {
-			Embedding []float32 `json:"embedding"`
-		} `json:"data"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if response.Error.Message != "" {
-		return nil, fmt.Errorf("api error: %s", response.Error.Message)
-	}
-
-	embeddings := make([][]float32, len(response.Data))
-	for i, data := range response.Data {
-		embeddings[i] = data.Embedding
-	}
-
-	return embeddings, nil
 }
