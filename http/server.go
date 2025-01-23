@@ -13,6 +13,8 @@ import (
 type GinServerConfig struct {
 	// Address 服务监听端口
 	Address string `yaml:"address" default:":8803"`
+	// KeepAlive
+	KeepAlive bool `yaml:"keep_alive" default:"true"`
 	// ReadTimeout 读取超时
 	ReadTimeout time.Duration `yaml:"read_timeout" default:"30s"`
 	// WriteTimeout 写入超时
