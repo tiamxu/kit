@@ -44,7 +44,7 @@ func (cfg *Config) mysqlSource() string {
 	if port == 0 {
 		port = 3306
 	}
-	dbSource := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true", cfg.Username, pwd, cfg.Host, port, cfg.Database)
+	dbSource := fmt.Sprintf("%s%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true", cfg.Username, pwd, cfg.Host, port, cfg.Database)
 	return dbSource
 }
 func (cfg *Config) postgresSource() string {

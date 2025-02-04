@@ -2,7 +2,6 @@ package sql
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go"
@@ -26,8 +25,6 @@ func Connect(dbConfig *Config) (*DB, error) {
 	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
 	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
 	db.SetConnMaxLifetime(time.Duration(dbConfig.ConnMaxLifetime) * time.Second)
-	fmt.Println(dbConfig)
-	fmt.Println(err)
 
 	return &DB{
 		DB:       db,
