@@ -5,8 +5,8 @@ go 1.23.4
 require (
 	github.com/ClickHouse/clickhouse-go v1.5.4
 	github.com/IBM/sarama v1.45.0
-	github.com/gin-contrib/cors v1.7.3
 	github.com/gin-gonic/gin v1.10.0
+	github.com/go-playground/validator/v10 v10.23.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/milvus-io/milvus-sdk-go/v2 v2.3.6
@@ -14,6 +14,7 @@ require (
 	github.com/segmentio/kafka-go v0.4.47
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tmc/langchaingo v0.1.10
+	golang.org/x/time v0.5.0
 )
 
 require (
@@ -36,7 +37,6 @@ require (
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.23.0 // indirect
 	github.com/goccy/go-json v0.10.4 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect

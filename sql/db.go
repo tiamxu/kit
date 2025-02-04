@@ -2,8 +2,7 @@ package sql
 
 import (
 	"database/sql"
-	// _ "database/sql"
-
+	"fmt"
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go"
@@ -27,7 +26,9 @@ func Connect(dbConfig *Config) (*DB, error) {
 	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
 	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
 	db.SetConnMaxLifetime(time.Duration(dbConfig.ConnMaxLifetime) * time.Second)
-	// fmt.Println(dbConfig)
+	fmt.Println(dbConfig)
+	fmt.Println(err)
+
 	return &DB{
 		DB:       db,
 		dbConfig: dbConfig,
@@ -51,7 +52,7 @@ func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err erro
 	if fn == nil {
 		return
 	}
-	
+
 	var _tx *sqlx.Tx
 	if len(tx) > 0 {
 		_tx = tx[0]
@@ -103,4 +104,3 @@ func (p *PreDB) Init(dbConfig *Config) error {
 	p.DB = db
 	return nil
 }
-
