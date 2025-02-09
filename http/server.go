@@ -2,15 +2,14 @@ package httpkit
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	"github.com/tiamxu/kit/log"
 	"golang.org/x/time/rate"
 )
@@ -57,17 +56,16 @@ func NewGin(cfg GinServerConfig) *gin.Engine {
 	// 创建gin实例
 	router := gin.New()
 
-	// 添加恢复中间件
-	router.Use(gin.Recovery())
-
-	// 添加日志中间件
+	// 添加中间件，注意顺序
 	if len(cfg.AccessLogFormat) == 0 {
 		cfg.AccessLogFormat = DefaultAccessLogFormat
 	}
-	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		Formatter: logFormatter(cfg.AccessLogFormat),
-		Output:    log.DefaultLogger().Writer(),
-	}))
+	router.Use(
+		RequestIDMiddleware(),                    // 请求ID中间件放在最前面
+		gin.Recovery(),                           // 恢复中间件
+		AccessLogMiddleware(cfg.AccessLogFormat), // 访问日志中间件
+	)
+	router.Use(RequestIDMiddleware())
 
 	// 静态文件服务
 	if len(cfg.StaticPrefix) > 0 && len(cfg.StaticDir) > 0 {
@@ -96,6 +94,114 @@ func defaultCORSConfig() *CORSConfig {
 		ExposeHeaders:    []string{"Content-Length", "Content-Type", "X-Request-ID", "X-Response-Time"},
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
+	}
+}
+
+// RequestIDMiddleware 生成和传递请求ID
+func RequestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从请求头获取请求ID，如果没有则生成新的
+		requestID := c.GetHeader("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		// 设置请求ID到上下文和响应头
+		c.Set("request_id", requestID)
+		c.Header("X-Request-ID", requestID)
+
+		c.Next()
+	}
+}
+
+// AccessLogMiddleware 访问日志中间件
+func AccessLogMiddleware(format string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		query := c.Request.URL.RawQuery
+
+		// 获取请求体大小
+		var requestSize int64
+		if c.Request.ContentLength > 0 {
+			requestSize = c.Request.ContentLength
+		}
+
+		// 处理请求
+		c.Next()
+
+		// 计算处理时间
+		end := time.Now()
+		latency := end.Sub(start)
+
+		// 获取请求ID
+		requestID, _ := c.Get("request_id")
+		if requestID == nil {
+			requestID = "-"
+		}
+
+		// 构建日志字段
+		fields := log.Fields{
+			"status":       c.Writer.Status(),
+			"method":       c.Request.Method,
+			"path":         path,
+			"ip":           c.ClientIP(),
+			"host":         c.Request.Host,
+			"request_id":   requestID,
+			"user_agent":   c.Request.UserAgent(),
+			"request_time": fmt.Sprintf("%.3fs", float64(latency.Microseconds())/1e6),
+			"bytes_in":     requestSize,
+			"bytes_out":    c.Writer.Size(),
+		}
+
+		// 添加可选字段
+		if query != "" {
+			fields["query"] = query
+		}
+		if realIP := c.GetHeader("X-Real-IP"); realIP != "" {
+			fields["real_ip"] = realIP
+		}
+		if referer := c.Request.Referer(); referer != "" {
+			fields["referer"] = referer
+		}
+		if proto := c.Request.Proto; proto != "" {
+			fields["protocol"] = proto
+		}
+		// 添加错误信息
+		if len(c.Errors) > 0 {
+			fields["error"] = c.Errors.String()
+			fields["error_count"] = len(c.Errors)
+		} else {
+			// 根据状态码使用不同的日志级别
+			statusCode := c.Writer.Status()
+			logger := log.WithFields(fields)
+
+			switch {
+			case statusCode >= 500:
+				logger.Error("server error")
+			case statusCode >= 400:
+				logger.Warn("client error")
+			case statusCode >= 300:
+				logger.Info("redirect")
+			default:
+				logger.Info("success")
+			}
+		}
+
+		// 如果指定了自定义格式，则额外输出格式化日志
+		if format == DefaultAccessLogFormat {
+			log.WithFields(fields).Info("access_log")
+		} else {
+			logMsg := format
+			for k, v := range fields {
+				placeholder := "${" + k + "}"
+				logMsg = strings.ReplaceAll(logMsg, placeholder, fmt.Sprintf("%v", v))
+				// logMsg = strings.ReplaceAll(logMsg, "${time}", end.Format(time.RFC3339))
+
+			}
+			// 使用 Info 级别输出格式化日志
+			log.Infoln(logMsg)
+		}
 	}
 }
 
@@ -169,68 +275,6 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 		}
 
 		c.Next()
-	}
-}
-
-func logFormatter(format string) gin.LogFormatter {
-	return func(param gin.LogFormatterParams) string {
-		// 获取请求ID
-		requestID := param.Request.Header.Get("X-Request-ID")
-		if requestID == "" {
-			requestID = "-"
-		}
-
-		// 计算请求耗时
-		latency := param.Latency.Milliseconds()
-		latencyLevel := "normal"
-		if latency > 1000 {
-			latencyLevel = "slow"
-		} else if latency > 5000 {
-			latencyLevel = "very_slow"
-		}
-
-		// 构建结构化日志
-		logFields := map[string]interface{}{
-			"time":          param.TimeStamp.Format(time.RFC3339),
-			"status":        param.StatusCode,
-			"latency":       latency,
-			"latency_level": latencyLevel,
-			"client_ip":     param.ClientIP,
-			"method":        param.Method,
-			"path":          param.Path,
-			"full_path":     param.Request.URL.RequestURI(),
-			"error":         param.ErrorMessage,
-			"request_id":    requestID,
-			"user_agent":    param.Request.UserAgent(),
-			"bytes_in":      param.Request.ContentLength,
-			"bytes_out":     param.BodySize,
-			"referer":       param.Request.Referer(),
-			"protocol":      param.Request.Proto,
-			"host":          param.Request.Host,
-			"query_params":  param.Request.URL.Query(),
-		}
-
-		// 如果使用自定义格式，则保持兼容
-		if format != DefaultAccessLogFormat {
-			log := format
-			log = strings.ReplaceAll(log, "${time}", logFields["time"].(string))
-			log = strings.ReplaceAll(log, "${status}", strconv.Itoa(logFields["status"].(int)))
-			log = strings.ReplaceAll(log, "${latency}", fmt.Sprintf("%dms", logFields["latency"].(int64)))
-			log = strings.ReplaceAll(log, "${client_ip}", logFields["client_ip"].(string))
-			log = strings.ReplaceAll(log, "${method}", logFields["method"].(string))
-			log = strings.ReplaceAll(log, "${path}", logFields["path"].(string))
-			log = strings.ReplaceAll(log, "${error}", logFields["error"].(string))
-			log = strings.ReplaceAll(log, "${request_id}", logFields["request_id"].(string))
-			log = strings.ReplaceAll(log, "${user_agent}", logFields["user_agent"].(string))
-			log = strings.ReplaceAll(log, "${bytes_out}", strconv.FormatInt(logFields["bytes_out"].(int64), 10))
-			log = strings.ReplaceAll(log, "${referer}", logFields["referer"].(string))
-			log = strings.ReplaceAll(log, "${protocol}", logFields["protocol"].(string))
-			return log
-		}
-
-		// 默认使用JSON格式
-		jsonLog, _ := json.Marshal(logFields)
-		return string(jsonLog)
 	}
 }
 

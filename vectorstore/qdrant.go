@@ -40,9 +40,9 @@ func (q *QdrantStore) Initialize(ctx context.Context) error {
 		return fmt.Errorf("invalid Qdrant URL: %w", err)
 	}
 	qdrantClient, err := client.NewClient(&client.Config{
-		Host:                   "120.24.61.231",
-		Port:                   16334,
-		APIKey:                 "ZfYOjrdr2io25WUKvpdwnJ8gfvc",
+		Host:                   q.cfg.Host,
+		Port:                   q.cfg.Port,
+		APIKey:                 q.cfg.ApiKey,
 		UseTLS:                 false,
 		SkipCompatibilityCheck: true,
 	})
