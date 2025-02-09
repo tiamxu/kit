@@ -39,7 +39,32 @@ func (q *QdrantStore) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid Qdrant URL: %w", err)
 	}
-
+	qdrantClient, err := client.NewClient(&client.Config{
+		Host:                   "120.24.61.231",
+		Port:                   16334,
+		APIKey:                 "ZfYOjrdr2io25WUKvpdwnJ8gfvc",
+		UseTLS:                 false,
+		SkipCompatibilityCheck: true,
+	})
+	if err != nil {
+		return fmt.Errorf("连接qdrant服务器失败: %w", err)
+	}
+	ok, err := qdrantClient.CollectionExists(ctx, q.cfg.Collection)
+	if err != nil {
+		return fmt.Errorf("无法检查集合是否存在: %w", err)
+	}
+	if !ok {
+		err = qdrantClient.CreateCollection(ctx, &client.CreateCollection{
+			CollectionName: q.cfg.Collection,
+			VectorsConfig: client.NewVectorsConfig(&client.VectorParams{
+				Size:     1024,
+				Distance: client.Distance_Cosine,
+			}),
+		})
+		if err != nil {
+			return fmt.Errorf("创建集合失败: %w", err)
+		}
+	}
 	store, err := qdrant.New(
 		qdrant.WithURL(*qdrantURL),
 		qdrant.WithCollectionName(q.cfg.Collection),

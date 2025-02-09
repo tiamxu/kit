@@ -15,11 +15,19 @@ const (
 	ModelTypeAliyun ModelType = "aliyun"
 )
 
+// LLMOptions 定义LLM配置选项
+type ModelOptions struct {
+	EnableEmbeddings bool
+	HTTPTimeout      time.Duration
+	MaxIdleConns     int
+	// 其他通用配置...
+}
+
 // Config contains configuration for all supported models
 type Config struct {
-	Type    ModelType      `yaml:"type"`
-	Ollama  OllamaConfig   `yaml:"ollama"`
-	Aliyun  AliyunConfig   `yaml:"aliyun"`
+	Type   ModelType    `yaml:"type"`
+	Ollama OllamaConfig `yaml:"ollama"`
+	Aliyun AliyunConfig `yaml:"aliyun"`
 }
 
 // OllamaConfig contains configuration for Ollama LLM
