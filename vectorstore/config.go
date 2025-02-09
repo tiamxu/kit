@@ -10,6 +10,10 @@ type MilvusConfig struct {
 	DBName     string      `yaml:"db_name"`
 	Collection string      `yaml:"collection"`
 	Index      IndexConfig `yaml:"index"`
+	Username   string      `yaml:"username,omitempty"`
+	Password   string      `yaml:"password,omitempty"`
+	Dimension  int         `yaml:"dimension"`
+	MaxLength  int         `yaml:"max_length,omitempty"`
 }
 
 type IndexConfig struct {
@@ -24,4 +28,7 @@ type QdrantConfig struct {
 	Port       int    `yaml:"port"`
 	Collection string `yaml:"collection"`
 	ApiKey     string `yaml:"api_key"`
+	Dimension  int    `yaml:"dimension"`
+	Distance   string `yaml:"distance"`
+	Https      bool   `yaml:"https"`
 }

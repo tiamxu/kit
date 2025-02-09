@@ -38,6 +38,9 @@ func NewMilvusStore(cfg *MilvusConfig, embedder embeddings.Embedder) *MilvusStor
 }
 
 func (m *MilvusStore) Initialize(ctx context.Context) error {
+	if err := m.cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
 	var idx entity.Index
 	var err error
 
@@ -75,6 +78,9 @@ func (m *MilvusStore) Initialize(ctx context.Context) error {
 }
 
 func (m *MilvusStore) CreateCollection(ctx context.Context) error {
+	if m.store == nil {
+		return fmt.Errorf("store not initialized")
+	}
 	// Create Milvus client
 	milvusClient, err := client.NewClient(ctx, client.Config{
 		Address: m.cfg.Address,
