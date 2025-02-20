@@ -2,7 +2,10 @@ package sql
 
 import (
 	"database/sql"
+	"errors"
 	"time"
+
+	"github.com/tiamxu/kit/log"
 
 	_ "github.com/ClickHouse/clickhouse-go"
 	_ "github.com/go-sql-driver/mysql"
@@ -14,10 +17,17 @@ type DB struct {
 	dbConfig *Config
 }
 
-//var db *sqlx.DB
-
 // Connect to a database and verify with a ping.
 func Connect(dbConfig *Config) (*DB, error) {
+	if dbConfig.MaxOpenConns <= 0 {
+		dbConfig.MaxOpenConns = 10
+	}
+	if dbConfig.MaxIdleConns <= 0 {
+		dbConfig.MaxIdleConns = 5
+	}
+	if dbConfig.ConnMaxLifetime <= 0 {
+		dbConfig.ConnMaxLifetime = 300 // Set a default value (in seconds)
+	}
 	db, err := sqlx.Connect(dbConfig.Driver, dbConfig.Source())
 	if err != nil {
 		return nil, err
@@ -45,9 +55,9 @@ func (d *DB) Callback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) error {
 
 // TransactCallback transactional operations.
 // nOTE: if an error is returned, the rollback method should be invoked outside the function.
-func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err error) {
+func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) error {
 	if fn == nil {
-		return
+		return nil
 	}
 
 	var _tx *sqlx.Tx
@@ -55,27 +65,38 @@ func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err erro
 		_tx = tx[0]
 	}
 	if _tx == nil {
-		_tx, err = d.Beginx()
+		_tx, err := d.Beginx()
 		if err != nil {
 			return err
 		}
 		defer func() {
 			if err != nil {
-				_tx.Rollback()
+				if rErr := _tx.Rollback(); rErr != nil {
+					// Log the rollback error
+					log.Printf("Error rolling back transaction: %v", rErr)
+				}
 			} else {
-				_tx.Commit()
+				if rErr := _tx.Commit(); rErr != nil {
+					// Log the commit error
+					log.Printf("Error committing transaction: %v", rErr)
+				}
 			}
 		}()
 	}
-	err = fn(_tx)
-	return err
+	return fn(_tx)
 }
 
 var ErrNoRows = sql.ErrNoRows
 
-// IsNoRows is the data exist or not.
+// IsNoRows checks if the error is a "no rows" error, supporting custom error types.
 func IsNoRows(err error) bool {
-	return ErrNoRows == err
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	return false
 }
 
 // PreDB preset *DB
@@ -93,6 +114,9 @@ func NewPreDB() *PreDB {
 
 // Init init
 func (p *PreDB) Init(dbConfig *Config) error {
+	if p.inited {
+		return nil // Prevent re-initializing if already initialized
+	}
 	db, err := Connect(dbConfig)
 	if err != nil {
 		return err
