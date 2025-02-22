@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/tiamxu/kit/log"
 )
 
 type RedisClient struct {
@@ -46,8 +45,8 @@ func NewClient(cfg *Config) (*RedisClient, error) {
 		MinIdleConns: cfg.MinIdle,
 		MaxIdleConns: cfg.MaxIdle,
 		DialTimeout:  time.Duration(cfg.DialTimeout) * time.Second,
-		ReadTimeout:  time.Duration(cfg.Timeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Timeout) * time.Second,
+		ReadTimeout:  time.Duration(cfg.Timeout) * time.Second, //从网络连接中读取数据超时时间
+		WriteTimeout: time.Duration(cfg.Timeout) * time.Second, //把数据写入网络连接的超时时间
 	}
 
 	client := redis.NewClient(option)
@@ -67,18 +66,20 @@ func NewClient(cfg *Config) (*RedisClient, error) {
 }
 
 // SetModelToCache save model to cache
-func (r *RedisClient) SetModelToCache(key string, model interface{}, ttl time.Duration) error {
-	log.Tracef("[cache: set_model_to_cache]: key=%s and ttl=%v", key, ttl)
-
-	ctx, cancel := r.getContextWithTimeout()
+func (r *RedisClient) SetModelToCache(ctx context.Context, key string, model interface{}, ttl time.Duration) error {
+	var cancel context.CancelFunc
+	if ctx == nil {
+		ctx, cancel = context.WithTimeout(context.Background(),
+			time.Duration(r.config.Timeout)*time.Second)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
-	// 使用优化后的压缩方法
 	gziped, data, err := toGzipJSON(model, r.config.GzipMinSize)
 	if err != nil {
 		return fmt.Errorf("SetModelToCache[compress] key=%s: %w", key, err)
 	}
-
 	// 根据压缩情况设置标志位
 	var flag uint32
 	if gziped {
@@ -94,16 +95,22 @@ func (r *RedisClient) SetModelToCache(key string, model interface{}, ttl time.Du
 
 	// 复用内存池
 	buf := bufferPool.Get().(*bytes.Buffer)
-	defer bufferPool.Put(buf)
-	buf.Reset()
+	defer func() {
+		buf.Reset()
+		bufferPool.Put(buf)
+	}()
 
 	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(cacheItem); err != nil {
 		return fmt.Errorf("SetModelToCache[encode] key=%s: %w", key, err)
 	}
 
 	var lastErr error
 	for i := 0; i <= r.config.RetryTimes; i++ {
+		if ctx.Err() != nil {
+			return fmt.Errorf("operation canceled: %w", ctx.Err())
+		}
 		if _, err = r.Set(ctx, key, buf.Bytes(), ttl).Result(); err == nil {
 			return nil
 		}
@@ -115,8 +122,16 @@ func (r *RedisClient) SetModelToCache(key string, model interface{}, ttl time.Du
 
 // GetCacheToModel get cache to model
 
-func (r *RedisClient) GetCacheToModel(key string, model interface{}) (bool, error) {
-	ctx, cancel := r.getContextWithTimeout()
+func (r *RedisClient) GetCacheToModel(ctx context.Context, key string, model interface{}) (bool, error) {
+	var cancel context.CancelFunc
+	if ctx == nil {
+		// 创建带配置超时的新上下文
+		ctx, cancel = context.WithTimeout(context.Background(),
+			time.Duration(r.config.Timeout)*time.Second)
+	} else {
+		// 包装原始上下文（确保始终有取消函数）
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
 	// 带重试的读取
@@ -125,6 +140,9 @@ func (r *RedisClient) GetCacheToModel(key string, model interface{}) (bool, erro
 		err   error
 	)
 	for i := 0; i <= r.config.RetryTimes; i++ {
+		if ctx.Err() != nil {
+			return false, fmt.Errorf("operation canceled: %w", ctx.Err())
+		}
 		if value, err = r.Get(ctx, key).Result(); err == nil {
 			break
 		}
@@ -171,10 +189,4 @@ func IsNotNil(err error) bool {
 		return true
 	}
 	return false
-}
-
-// getContextWithTimeout 返回一个带有指定超时时间的上下文
-func (r *RedisClient) getContextWithTimeout() (context.Context, context.CancelFunc) {
-	timeout := time.Duration(r.config.Timeout) * time.Second
-	return context.WithTimeout(context.Background(), timeout)
 }
