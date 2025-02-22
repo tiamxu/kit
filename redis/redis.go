@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,16 +23,28 @@ func NewClient(cfg *Config) (*RedisClient, error) {
 		cfg.PoolSize = 20
 	}
 	if cfg.DialTimeout <= 0 {
-		cfg.DialTimeout = 5 // 默认连接超时时间设为5秒
+		cfg.DialTimeout = 5
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 10 // 默认读写超时时间为10秒
+		cfg.Timeout = 10
+	}
+	if cfg.MaxIdle <= 0 {
+		cfg.MaxIdle = 15 // 默认最大空闲连接
+	}
+	if cfg.MinIdle < 0 {
+		cfg.MinIdle = 0 // 确保最小空闲连接不为负数
+	}
+	// 设置压缩阈值默认值
+	if cfg.GzipMinSize <= 0 {
+		cfg.GzipMinSize = 2048 // 提高默认阈值
 	}
 	option := &redis.Options{
 		Addr:         cfg.Address,
 		Password:     cfg.Password,
 		DB:           cfg.DB,
 		PoolSize:     cfg.PoolSize,
+		MinIdleConns: cfg.MinIdle,
+		MaxIdleConns: cfg.MaxIdle,
 		DialTimeout:  time.Duration(cfg.DialTimeout) * time.Second,
 		ReadTimeout:  time.Duration(cfg.Timeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Timeout) * time.Second,
@@ -55,34 +68,49 @@ func NewClient(cfg *Config) (*RedisClient, error) {
 
 // SetModelToCache save model to cache
 func (r *RedisClient) SetModelToCache(key string, model interface{}, ttl time.Duration) error {
+	log.Tracef("[cache: set_model_to_cache]: key=%s and ttl=%v", key, ttl)
+
 	ctx, cancel := r.getContextWithTimeout()
 	defer cancel()
 
-	log.Tracef("[cache: set_model_to_cache]: key=%s and ttl=%v", key, ttl)
-	var (
-		bs        []byte
-		data      []byte
-		err       error
-		cacheFlag = CacheFormatJSON
-		gziped    bool
-	)
+	// 使用优化后的压缩方法
+	gziped, data, err := toGzipJSON(model, r.config.GzipMinSize)
+	if err != nil {
+		return fmt.Errorf("SetModelToCache[compress] key=%s: %w", key, err)
+	}
 
-	if gziped, data, err = toGzipJSON(model); err != nil {
-		return err
-	}
+	// 根据压缩情况设置标志位
+	var flag uint32
 	if gziped {
-		cacheFlag = CacheFormatJSONGzip
+		flag = CacheFormatJSONGzip
+	} else {
+		flag = CacheFormatJSON
 	}
-	if bs, err = json.Marshal(modelCacheItem{
+
+	cacheItem := modelCacheItem{
 		Data: data,
-		Flag: uint32(cacheFlag),
-	}); err != nil {
-		return err
+		Flag: flag,
 	}
-	if _, err = r.Set(ctx, key, string(bs), ttl).Result(); err != nil {
-		return err
+
+	// 复用内存池
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+
+	enc := json.NewEncoder(buf)
+	if err := enc.Encode(cacheItem); err != nil {
+		return fmt.Errorf("SetModelToCache[encode] key=%s: %w", key, err)
 	}
-	return nil
+
+	var lastErr error
+	for i := 0; i <= r.config.RetryTimes; i++ {
+		if _, err = r.Set(ctx, key, buf.Bytes(), ttl).Result(); err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(time.Duration(i*100) * time.Millisecond) // 线性退避
+	}
+	return fmt.Errorf("SetModelToCache failed after %d retries: %w", r.config.RetryTimes, lastErr)
 }
 
 // GetCacheToModel get cache to model
@@ -91,31 +119,46 @@ func (r *RedisClient) GetCacheToModel(key string, model interface{}) (bool, erro
 	ctx, cancel := r.getContextWithTimeout()
 	defer cancel()
 
-	log.Tracef("[cache: get_cache_to_model], key=%s", key)
-	it, err := r.Get(ctx, key).Result()
-	if err != nil {
+	// 带重试的读取
+	var (
+		value string
+		err   error
+	)
+	for i := 0; i <= r.config.RetryTimes; i++ {
+		if value, err = r.Get(ctx, key).Result(); err == nil {
+			break
+		}
 		if err == redis.Nil {
 			return false, nil
 		}
-		return false, err
-	}
-	cacheItem := modelCacheItem{}
-	if err = json.Unmarshal([]byte(it), &cacheItem); err != nil {
-		log.Errorf("[cache:%s] Unmarshal value error, %s", key, err)
-		return false, fmt.Errorf("unmarshal error for key %s: %w", key, err)
-	}
-	switch cacheItem.Flag {
-	case CacheFormatJSON:
-		err = json.Unmarshal(cacheItem.Data, model)
-	case CacheFormatJSONGzip:
-		err = fromGzipJSON(cacheItem.Data, model)
-	default:
-		err = fmt.Errorf("invalid cache formate %d", cacheItem.Flag)
+		time.Sleep(time.Duration(i*100) * time.Millisecond)
 	}
 	if err != nil {
-		log.Errorf("[cache:%s] %s", key, err)
-		return false, err
+		return false, fmt.Errorf("GetCacheToModel[key=%s]: %w", key, err)
 	}
+
+	// 优化解码流程
+	var cacheItem modelCacheItem
+	dec := json.NewDecoder(bytes.NewReader([]byte(value)))
+	dec.UseNumber() // 防止数值类型失真
+	if err := dec.Decode(&cacheItem); err != nil {
+		return false, fmt.Errorf("GetCacheToModel[decode_header] key=%s: %w", key, err)
+	}
+
+	// 优化解压分支判断
+	switch cacheItem.Flag {
+	case CacheFormatJSON:
+		if err := json.Unmarshal(cacheItem.Data, model); err != nil {
+			return false, fmt.Errorf("GetCacheToModel[unmarshal] key=%s: %w", key, err)
+		}
+	case CacheFormatJSONGzip:
+		if err := fromGzipJSON(cacheItem.Data, model); err != nil {
+			return false, fmt.Errorf("GetCacheToModel[unzip] key=%s: %w", key, err)
+		}
+	default:
+		return false, fmt.Errorf("GetCacheToModel[invalid_flag] key=%s flag=%d", key, cacheItem.Flag)
+	}
+
 	return true, nil
 }
 

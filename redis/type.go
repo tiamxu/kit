@@ -31,9 +31,11 @@ type Config struct {
 	// IdleTimeout 闲置超时，默认5分钟，-1表示取消闲置超时检查
 	IdleTimeout int `yaml:"idle_timeout" json:"idle_timeout"`
 	RetryTimes  int `yaml:"retry_times" json:"retry_times"`
+	// 压缩阈值配置
+	GzipMinSize int `yaml:"gzip_min_size" json:"gzip_min_size"`
 }
 
 type modelCacheItem struct {
-	Data []byte
 	Flag uint32
+	Data []byte
 }
