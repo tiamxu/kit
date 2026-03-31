@@ -7,6 +7,7 @@
 | 模块 | 说明 |
 |------|------|
 | **cache** | 缓存语义层（序列化、压缩、批量操作、分布式锁） |
+| **cli** | CLI 脚手架（基于 cobra，支持工具注册、链式命令构建） |
 | **es** | Elasticsearch 客户端封装 |
 | **http** | HTTP 服务器和中间件（基于 Gin） |
 | **kafka** | Kafka 消息队列封装（基于 kafka-go） |
@@ -495,6 +496,93 @@ router.GET("/api/users/:id", func(c *gin.Context) {
 })
 ```
 
+#### 8. CLI 脚手架
+
+基于 cobra，支持工具注册、链式命令构建，适用于企业级多工具 CLI 应用。
+
+```go
+import (
+    "fmt"
+    "time"
+    "github.com/tiamxu/kit/cli"
+)
+
+// 定义工具（实现 Tool 接口即可接入脚手架）
+type DatabaseTool struct{}
+
+func (t *DatabaseTool) Name() string        { return "db" }
+func (t *DatabaseTool) Description() string { return "Database management tools" }
+func (t *DatabaseTool) Flags() []cli.Flag {
+    return []cli.Flag{
+        cli.StringFlag("host", "H", "localhost", "database host"),
+        cli.IntFlag("port", "p", 3306, "database port"),
+    }
+}
+func (t *DatabaseTool) Commands() []*cli.Command {
+    return []*cli.Command{
+        cli.NewCommand("migrate").SetDescription("Run database migrations").
+            AddFlags(cli.StringFlag("dir", "d", "./migrations", "migration directory")).
+            SetRun(func(ctx *cli.Context) error {
+                fmt.Printf("migrating from %s, host=%s, port=%d\n",
+                    ctx.String("dir"), ctx.String("host"), ctx.Int("port"))
+                return nil
+            }),
+        cli.NewCommand("seed").SetDescription("Seed database with initial data").
+            AddFlags(cli.RequiredFlag(cli.StringFlag("file", "f", "", "seed file"))).
+            SetRun(func(ctx *cli.Context) error {
+                return runSeed(ctx.String("file"))
+            }),
+    }
+}
+
+// 创建脚手架并注册工具
+app := cli.NewApp(cli.AppConfig{
+    Name:        "mytool",
+    Description: "Enterprise CLI Toolkit",
+    Version:     "1.0.0",
+    PreRun: func(ctx *cli.Context) error {
+        cfgPath := ctx.String("config")
+        if cfgPath != "" {
+            // 加载配置，注入到 ctx.Config
+        }
+        return nil
+    },
+})
+
+app.RegisterTool(
+    &DatabaseTool{},
+    // &CacheTool{},
+    // &KafkaTool{},
+)
+
+if err := app.Run(); err != nil {
+    panic(err)
+}
+```
+
+**命令行效果：**
+
+```bash
+$ mytool version
+mytool v1.0.0
+
+$ mytool db migrate --host 127.0.0.1 --port 3306 --dir ./migrations
+$ mytool db seed --file ./seed.sql
+
+$ mytool --config config.yaml db migrate --dir ./migrations
+```
+
+**可用 Flag 类型：**
+
+| 函数 | 说明 |
+|------|------|
+| `StringFlag(name, short, default, usage)` | 字符串参数 |
+| `IntFlag(name, short, default, usage)` | 整数参数 |
+| `BoolFlag(name, short, default, usage)` | 布尔参数 |
+| `DurationFlag(name, short, default, usage)` | 时间段参数 |
+| `StringSliceFlag(name, short, default, usage)` | 字符串切片参数 |
+| `RequiredFlag(flag)` | 标记为必填 |
+
 ## 配置说明
 
 ### Redis 客户端配置
@@ -590,6 +678,31 @@ router.GET("/api/users/:id", func(c *gin.Context) {
 | Distance | string | 距离度量（Cosine、Euclid、Dot、Manhattan） | Cosine |
 | ApiKey | string | API 密钥 | "" |
 | Https | bool | 是否启用 TLS | false |
+
+### HTTP 服务器配置
+
+| 字段 | 类型 | 描述 | 默认值 |
+|------|------|------|--------|
+| Address | string | 监听地址 | :8080 |
+| KeepAlive | bool | 是否启用 Keep-Alive | false |
+| ReadTimeout | time.Duration | 读取超时 | 0 |
+| WriteTimeout | time.Duration | 写入超时 | 0 |
+| AccessLogFormat | string | 访问日志格式（留空使用默认格式） | DefaultAccessLogFormat |
+| StaticPrefix | string | 静态文件 URL 前缀 | "" |
+| StaticDir | string | 静态文件目录 | "" |
+| BodyLimit | int64 | 请求体大小限制（字节） | 0 |
+| CORS | *CORSConfig | CORS 跨域配置 | nil |
+
+### CORS 配置
+
+| 字段 | 类型 | 描述 | 默认值 |
+|------|------|------|--------|
+| AllowOrigins | []string | 允许的来源（支持 * 通配符） | ["*"] |
+| AllowMethods | []string | 允许的 HTTP 方法 | [GET,POST,PUT,DELETE,OPTIONS] |
+| AllowHeaders | []string | 允许的请求头 | [Origin,Content-Type,...] |
+| ExposeHeaders | []string | 暴露给客户端的响应头 | [Content-Length,Content-Type,...] |
+| AllowCredentials | bool | 是否允许携带凭证 | false |
+| MaxAge | time.Duration | 预检请求缓存时间 | 12h |
 
 ## 许可证
 
