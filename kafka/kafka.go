@@ -15,9 +15,10 @@ type KafkaProducer struct {
 	config *Config
 }
 
+// Config Kafka生产者配置
 type Config struct {
-	Brokers       []string      `yaml:"brokers"`
-	Topic         string        `yaml:"topic"`
+	Brokers       []string      `yaml:"brokers"`        // Kafka broker地址列表
+	Topic         string        `yaml:"topic"`          // 默认主题
 	MaxRetries    int           `yaml:"max_retries"`    // 最大重试次数
 	RetryInterval time.Duration `yaml:"retry_interval"` // 重试间隔
 	BatchTimeout  time.Duration `yaml:"batch_timeout"`  // 批量提交超时
@@ -25,6 +26,14 @@ type Config struct {
 }
 
 // NewKafkaProducer 创建一个新的Kafka生产者
+// 参数:
+//
+//	cfg: Kafka生产者配置
+//
+// 返回:
+//
+//	*KafkaProducer: Kafka生产者实例
+//	error: 错误信息
 func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	if len(cfg.Brokers) == 0 {
 		return nil, fmt.Errorf("brokers cannot be empty")
@@ -48,9 +57,8 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	}
 
 	// 创建Kafka writer配置
-	config := kafka.WriterConfig{
-		Brokers: cfg.Brokers,
-		// Topic:        cfg.Topic,
+	writerConfig := kafka.WriterConfig{
+		Brokers:      cfg.Brokers,
 		Balancer:     &kafka.LeastBytes{},
 		BatchTimeout: cfg.BatchTimeout,
 		BatchSize:    cfg.BatchSize,
@@ -58,17 +66,20 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	}
 
 	// 创建Kafka writer实例
-	writer := kafka.NewWriter(config)
-	//自动创建topic
+	writer := kafka.NewWriter(writerConfig)
+	// 自动创建topic
 	writer.AllowAutoTopicCreation = true
-	p := &KafkaProducer{
+
+	return &KafkaProducer{
 		writer: writer,
 		config: cfg,
-	}
-	return p, nil
+	}, nil
 }
 
 // Close 关闭Kafka生产者
+// 返回:
+//
+//	error: 错误信息
 func (p *KafkaProducer) Close() error {
 	if p.writer != nil {
 		return p.writer.Close()
@@ -77,6 +88,15 @@ func (p *KafkaProducer) Close() error {
 }
 
 // SendMessage 发送消息到Kafka
+// 参数:
+//
+//	topic: 主题
+//	key: 消息键
+//	value: 消息值
+//
+// 返回:
+//
+//	error: 错误信息
 func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
 	// 创建消息
 	message := kafka.Message{
@@ -86,12 +106,7 @@ func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
 	}
 
 	// 发送消息并处理可能的错误
-	err := p.writer.WriteMessages(context.Background(), message)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return p.writer.WriteMessages(context.Background(), message)
 }
 
 // KafkaConsumer 封装了使用segmentio/kafka-go的Kafka消费者
@@ -100,25 +115,34 @@ type KafkaConsumer struct {
 }
 
 // NewKafkaConsumer 创建一个新的Kafka消费者
+// 参数:
+//
+//	brokers: Kafka broker地址列表
+//	topic: 主题
+//	groupID: 消费者组ID
+//
+// 返回:
+//
+//	*KafkaConsumer: Kafka消费者实例
+//	error: 错误信息
 func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaConsumer, error) {
 	// 创建Kafka reader配置
-	config := kafka.ReaderConfig{
+	readerConfig := kafka.ReaderConfig{
 		Brokers:        brokers,
 		Topic:          topic,
 		GroupID:        groupID,
 		MinBytes:       10e3,
-		MaxBytes:       10e6, //10MB
+		MaxBytes:       10e6, // 10MB
 		StartOffset:    kafka.LastOffset,
 		CommitInterval: time.Second, // 每秒刷新一次提交给 Kafka
 	}
 
 	// 创建Kafka reader实例
-	reader := kafka.NewReader(config)
+	reader := kafka.NewReader(readerConfig)
 
-	c := &KafkaConsumer{
+	return &KafkaConsumer{
 		reader: reader,
-	}
-	return c, nil
+	}, nil
 }
 
 // ConsumeMessage 从Kafka消费消息
@@ -127,7 +151,7 @@ func (c *KafkaConsumer) ConsumeMessage() {
 		// 读取消息并处理可能的错误
 		message, err := c.reader.ReadMessage(context.Background())
 		if err != nil {
-			log.Printf("found error from kafka reader %v", err)
+			log.Printf("found error from kafka reader: %v", err)
 			continue
 		}
 

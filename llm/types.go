@@ -41,12 +41,12 @@ type OllamaConfig struct {
 }
 
 type AliyunConfig struct {
-	BaseURL        string        `yaml:"base_url"`
-	APIKey         string        `yaml:"api_key"`
-	LLMModel       string        `yaml:"llm_model"`
-	EmbeddingModel string        `yaml:"embedding_model"`
-	Timeout        time.Duration `yaml:"timeout"`
-	MaxIdleConns   int           `yaml:"max_idle_conns"`
+	BaseURL        string        `yaml:"base_url" json:"base_url"`
+	APIKey         string        `yaml:"api_key" json:"-"`
+	LLMModel       string        `yaml:"llm_model" json:"llm_model"`
+	EmbeddingModel string        `yaml:"embedding_model" json:"embedding_model"`
+	Timeout        time.Duration `yaml:"timeout" json:"timeout"`
+	MaxIdleConns   int           `yaml:"max_idle_conns" json:"max_idle_conns"`
 }
 
 // Validate checks if the configuration is valid

@@ -6,32 +6,49 @@ import (
 )
 
 type Config struct {
-	Driver          string `yaml:"driver"`
-	Database        string `yaml:"database"`
-	Username        string `yaml:"username"`
-	Password        string `yaml:"password"`
-	Host            string `yaml:"host"`
-	Port            int    `yaml:"port"`
-	MaxIdleConns    int    `yaml:"max_idle_conns"`
-	MaxOpenConns    int    `yaml:"max_open_conns"`
-	ConnMaxLifetime int    `yaml:"conn_max_lifetime"`
-	// ReadTimeout clickhouse read timeout in second
-	ReadTimeout int `yaml:"read_timeout"`
-	// WriteTimeout clickhouse write timeout in second
-	WriteTimeout int `yaml:"write_timeout"`
+	Driver          string `yaml:"driver" json:"driver"`
+	Database        string `yaml:"database" json:"database"`
+	Username        string `yaml:"username" json:"username"`
+	Password        string `yaml:"password" json:"-"`
+	Host            string `yaml:"host" json:"host"`
+	Port            int    `yaml:"port" json:"port"`
+	MaxIdleConns    int    `yaml:"max_idle_conns" json:"max_idle_conns"`
+	MaxOpenConns    int    `yaml:"max_open_conns" json:"max_open_conns"`
+	ConnMaxLifetime int    `yaml:"conn_max_lifetime" json:"conn_max_lifetime"`
+	ConnMaxIdleTime int    `yaml:"conn_max_idle_time" json:"conn_max_idle_time"`
+	ReadTimeout     int    `yaml:"read_timeout" json:"read_timeout"`
+	WriteTimeout    int    `yaml:"write_timeout" json:"write_timeout"`
 }
 
-func (cfg *Config) Source() string {
+func (cfg *Config) Validate() error {
+	if cfg.Driver == "" {
+		return fmt.Errorf("sql: driver is required")
+	}
+	supportedDrivers := map[string]bool{
+		"mysql": true, "postgres": true, "clickhouse": true,
+	}
+	if !supportedDrivers[strings.ToLower(cfg.Driver)] {
+		return fmt.Errorf("sql: unsupported driver %q, supported: mysql, postgres, clickhouse", cfg.Driver)
+	}
+	if cfg.Host == "" {
+		return fmt.Errorf("sql: host is required")
+	}
+	if cfg.Database == "" {
+		return fmt.Errorf("sql: database is required")
+	}
+	return nil
+}
+
+func (cfg *Config) Source() (string, error) {
 	switch strings.ToLower(cfg.Driver) {
 	case "mysql":
-		return cfg.mysqlSource()
+		return cfg.mysqlSource(), nil
 	case "postgres":
-		return cfg.postgresSource()
+		return cfg.postgresSource(), nil
 	case "clickhouse":
-		return cfg.clickHouseSource()
+		return cfg.clickHouseSource(), nil
 	default:
-		return ""
-
+		return "", fmt.Errorf("sql: unsupported driver %q", cfg.Driver)
 	}
 }
 
@@ -44,9 +61,10 @@ func (cfg *Config) mysqlSource() string {
 	if port == 0 {
 		port = 3306
 	}
-	dbSource := fmt.Sprintf("%s%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true", cfg.Username, pwd, cfg.Host, port, cfg.Database)
-	return dbSource
+	return fmt.Sprintf("%s%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true",
+		cfg.Username, pwd, cfg.Host, port, cfg.Database)
 }
+
 func (cfg *Config) postgresSource() string {
 	pwd := cfg.Password
 	if pwd != "" {
@@ -56,8 +74,8 @@ func (cfg *Config) postgresSource() string {
 	if port == 0 {
 		port = 5432
 	}
-	dbSource := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", cfg.Username, pwd, cfg.Host, port, cfg.Database)
-	return dbSource
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		cfg.Username, pwd, cfg.Host, port, cfg.Database)
 }
 
 func (cfg *Config) clickHouseSource() string {
@@ -70,7 +88,6 @@ func (cfg *Config) clickHouseSource() string {
 	if cfg.Port == 0 {
 		cfg.Port = 9000
 	}
-	//clickhouse://username:password@host:port/database?debug=false
-	dbSource := fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s&read_timeout=%d&write_timeout=%d", cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database, cfg.ReadTimeout, cfg.WriteTimeout)
-	return dbSource
+	return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s&read_timeout=%d&write_timeout=%d",
+		cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database, cfg.ReadTimeout, cfg.WriteTimeout)
 }

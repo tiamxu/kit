@@ -2,18 +2,18 @@ package es
 
 type Config struct {
 	// ES节点地址
-	Addresses []string `yaml:"addresses"`
+	Addresses []string `yaml:"addresses" json:"addresses"`
 	// 认证用户名
-	Username string `yaml:"username"`
+	Username string `yaml:"username" json:"username"`
 	// 认证密码
-	Password string `yaml:"password"`
+	Password string `yaml:"password" json:"-"`
 	// 最大重试次数
-	MaxRetries int `yaml:"max_retries"`
+	MaxRetries int `yaml:"max_retries" json:"max_retries"`
 	// 请求超时时间
-	Timeout     int  `yaml:"timeout"`
-	EnableDebug bool `yaml:"enable_debug"` // 启用调试日志
+	Timeout     int  `yaml:"timeout" json:"timeout"`
+	EnableDebug bool `yaml:"enable_debug" json:"enable_debug"` // 启用调试日志
 	// 最大空闲连接数
-	MaxIdleConns int `yaml:"max_idle_conns"`
+	MaxIdleConns int `yaml:"max_idle_conns" json:"max_idle_conns"`
 	// 空闲连接超时
-	IdleConnTimeout int `yaml:"idle_conn_timeout"` // 修正字段名称
+	IdleConnTimeout int `yaml:"idle_conn_timeout" json:"idle_conn_timeout"` // 修正字段名称
 }

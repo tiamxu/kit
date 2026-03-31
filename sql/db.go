@@ -3,13 +3,11 @@ package sql
 import (
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
-	"github.com/tiamxu/kit/log"
-
-	_ "github.com/ClickHouse/clickhouse-go"
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/tiamxu/kit/log"
 )
 
 type DB struct {
@@ -17,111 +15,116 @@ type DB struct {
 	dbConfig *Config
 }
 
-// Connect to a database and verify with a ping.
 func Connect(dbConfig *Config) (*DB, error) {
-	if dbConfig.MaxOpenConns <= 0 {
-		dbConfig.MaxOpenConns = 10
+	if err := dbConfig.Validate(); err != nil {
+		return nil, err
 	}
-	if dbConfig.MaxIdleConns <= 0 {
-		dbConfig.MaxIdleConns = 5
+
+	cfg := *dbConfig
+	if cfg.MaxOpenConns <= 0 {
+		cfg.MaxOpenConns = 10
 	}
-	if dbConfig.ConnMaxLifetime <= 0 {
-		dbConfig.ConnMaxLifetime = 300 // Set a default value (in seconds)
+	if cfg.MaxIdleConns <= 0 {
+		cfg.MaxIdleConns = 5
 	}
-	db, err := sqlx.Connect(dbConfig.Driver, dbConfig.Source())
+	if cfg.ConnMaxLifetime <= 0 {
+		cfg.ConnMaxLifetime = 300
+	}
+	if cfg.ConnMaxIdleTime <= 0 {
+		cfg.ConnMaxIdleTime = 60
+	}
+
+	dsn, err := cfg.Source()
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
-	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
-	db.SetConnMaxLifetime(time.Duration(dbConfig.ConnMaxLifetime) * time.Second)
+
+	db, err := sqlx.Connect(cfg.Driver, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
+	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
+
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
 
 	return &DB{
 		DB:       db,
-		dbConfig: dbConfig,
+		dbConfig: &cfg,
 	}, nil
 }
 
-// Callback non-transactional operations.
-func (d *DB) Callback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) error {
-	if fn == nil {
-		return nil
-	}
-	if len(tx) > 0 && tx[0] != nil {
-		return fn(tx[0])
-	}
-	return fn(nil)
-}
-
-// TransactCallback transactional operations.
-// nOTE: if an error is returned, the rollback method should be invoked outside the function.
 func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) error {
 	if fn == nil {
 		return nil
 	}
 
 	var _tx *sqlx.Tx
-	if len(tx) > 0 {
+	var err error
+	var needCommit bool
+	if len(tx) > 0 && tx[0] != nil {
 		_tx = tx[0]
-	}
-	if _tx == nil {
-		_tx, err := d.Beginx()
+	} else {
+		_tx, err = d.Beginx()
 		if err != nil {
 			return err
 		}
+		needCommit = true
 		defer func() {
-			if err != nil {
-				if rErr := _tx.Rollback(); rErr != nil {
-					// Log the rollback error
-					log.Printf("Error rolling back transaction: %v", rErr)
-				}
-			} else {
-				if rErr := _tx.Commit(); rErr != nil {
-					// Log the commit error
-					log.Printf("Error committing transaction: %v", rErr)
+			if needCommit {
+				if err != nil {
+					if rErr := _tx.Rollback(); rErr != nil {
+						log.Errorf("error rolling back transaction: %v", rErr)
+					}
+				} else {
+					if rErr := _tx.Commit(); rErr != nil {
+						log.Errorf("error committing transaction: %v", rErr)
+						err = rErr
+					}
 				}
 			}
 		}()
 	}
-	return fn(_tx)
+
+	err = fn(_tx)
+	return err
 }
 
-var ErrNoRows = sql.ErrNoRows
-
-// IsNoRows checks if the error is a "no rows" error, supporting custom error types.
 func IsNoRows(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return true
-	}
-	return false
+	return errors.Is(err, sql.ErrNoRows)
 }
 
-// PreDB preset *DB
 type PreDB struct {
-	*DB
+	db     *DB
+	mu     sync.Mutex
 	inited bool
 }
 
-// NewPreDB creates a unconnected *DB
 func NewPreDB() *PreDB {
-	return &PreDB{
-		DB: &DB{},
-	}
+	return &PreDB{}
 }
 
-// Init init
 func (p *PreDB) Init(dbConfig *Config) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.inited {
-		return nil // Prevent re-initializing if already initialized
+		return nil
 	}
 	db, err := Connect(dbConfig)
 	if err != nil {
 		return err
 	}
+	p.db = db
 	p.inited = true
-	p.DB = db
 	return nil
+}
+
+func (p *PreDB) DB() *DB {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.db
 }
