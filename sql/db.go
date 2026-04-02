@@ -126,5 +126,8 @@ func (p *PreDB) Init(dbConfig *Config) error {
 func (p *PreDB) DB() *DB {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if !p.inited {
+		return nil
+	}
 	return p.db
 }

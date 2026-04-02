@@ -11,6 +11,9 @@ import (
 const (
 	defaultCompressMinSize = 2048
 	lockScript            = `
+if redis.call("get", KEYS[1]) == false then
+    return 0
+end
 if redis.call("get", KEYS[1]) == ARGV[1] then
     return redis.call("del", KEYS[1])
 else
@@ -23,6 +26,7 @@ end
 type RedisCache struct {
 	client *redis.Client
 	opts   Options
+	locks  map[string]string
 }
 
 // NewRedisCache 创建Redis缓存实例
@@ -33,6 +37,7 @@ func NewRedisCache(client *redis.Client, opts Options) *RedisCache {
 	return &RedisCache{
 		client: client,
 		opts:   opts,
+		locks:  make(map[string]string),
 	}
 }
 
@@ -69,19 +74,13 @@ func (c *RedisCache) Exists(ctx context.Context, keys ...string) (map[string]boo
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	result, err := c.client.Exists(ctx, keys...).Result()
-	if err != nil {
-		return nil, err
-	}
 	exists := make(map[string]bool, len(keys))
 	for _, k := range keys {
-		exists[k] = false
-	}
-	if result > 0 {
-		for _, k := range keys {
-			n, _ := c.client.Exists(ctx, k).Result()
-			exists[k] = n > 0
+		n, err := c.client.Exists(ctx, k).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to check key existence: %w", err)
 		}
+		exists[k] = n > 0
 	}
 	return exists, nil
 }
@@ -100,7 +99,10 @@ func (c *RedisCache) MGet(ctx context.Context, keys ...string) (map[string]*stri
 		if v == nil {
 			result[keys[i]] = nil
 		} else {
-			s := v.(string)
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("expected string value for key %s, got %T", keys[i], v)
+			}
 			result[keys[i]] = &s
 		}
 	}
@@ -182,13 +184,18 @@ func (c *RedisCache) TryLock(ctx context.Context, key string, ttl time.Duration)
 	if !ok {
 		return false, nil
 	}
+	c.locks[lockKey] = token
 	return true, nil
 }
 
 // Unlock 释放分布式锁（使用 Lua 脚本保证原子性）
 func (c *RedisCache) Unlock(ctx context.Context, key string) error {
 	lockKey := fmt.Sprintf("lock:%s", key)
-	token := fmt.Sprintf("%d", time.Now().UnixNano())
+	token, ok := c.locks[lockKey]
+	if !ok {
+		return fmt.Errorf("lock not held for key: %s", key)
+	}
+	delete(c.locks, lockKey)
 	_, err := c.client.Eval(ctx, lockScript, []string{lockKey}, token).Result()
 	return err
 }

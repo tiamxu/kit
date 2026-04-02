@@ -3,6 +3,11 @@ package sql
 import (
 	"fmt"
 	"strings"
+
+	// 注册常用驱动
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 type Config struct {
@@ -57,12 +62,16 @@ func (cfg *Config) mysqlSource() string {
 	if pwd != "" {
 		pwd = ":" + pwd
 	}
+	username := cfg.Username
+	if username == "" {
+		username = "root"
+	}
 	port := cfg.Port
 	if port == 0 {
 		port = 3306
 	}
 	return fmt.Sprintf("%s%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true",
-		cfg.Username, pwd, cfg.Host, port, cfg.Database)
+		username, pwd, cfg.Host, port, cfg.Database)
 }
 
 func (cfg *Config) postgresSource() string {

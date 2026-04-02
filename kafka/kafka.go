@@ -98,15 +98,24 @@ func (p *KafkaProducer) Close() error {
 //
 //	error: 错误信息
 func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
-	// 创建消息
 	message := kafka.Message{
 		Topic: topic,
 		Key:   key,
 		Value: value,
 	}
 
-	// 发送消息并处理可能的错误
-	return p.writer.WriteMessages(context.Background(), message)
+	var lastErr error
+	for i := 0; i < p.config.MaxRetries; i++ {
+		err := p.writer.WriteMessages(context.Background(), message)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if i < p.config.MaxRetries-1 {
+			time.Sleep(p.config.RetryInterval)
+		}
+	}
+	return fmt.Errorf("failed to send message after %d retries: %w", p.config.MaxRetries, lastErr)
 }
 
 // KafkaConsumer 封装了使用segmentio/kafka-go的Kafka消费者
@@ -126,6 +135,15 @@ type KafkaConsumer struct {
 //	*KafkaConsumer: Kafka消费者实例
 //	error: 错误信息
 func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaConsumer, error) {
+	if len(brokers) == 0 {
+		return nil, fmt.Errorf("brokers cannot be empty")
+	}
+	if topic == "" {
+		return nil, fmt.Errorf("topic cannot be empty")
+	}
+	if groupID == "" {
+		return nil, fmt.Errorf("groupID cannot be empty")
+	}
 	// 创建Kafka reader配置
 	readerConfig := kafka.ReaderConfig{
 		Brokers:        brokers,
@@ -136,26 +154,27 @@ func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaCon
 		StartOffset:    kafka.LastOffset,
 		CommitInterval: time.Second, // 每秒刷新一次提交给 Kafka
 	}
-
 	// 创建Kafka reader实例
 	reader := kafka.NewReader(readerConfig)
-
 	return &KafkaConsumer{
 		reader: reader,
 	}, nil
 }
 
 // ConsumeMessage 从Kafka消费消息
-func (c *KafkaConsumer) ConsumeMessage() {
+func (c *KafkaConsumer) ConsumeMessage(ctx context.Context) error {
 	for {
-		// 读取消息并处理可能的错误
-		message, err := c.reader.ReadMessage(context.Background())
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		message, err := c.reader.ReadMessage(ctx)
 		if err != nil {
 			log.Printf("found error from kafka reader: %v", err)
-			continue
+			return err
 		}
 
-		// 打印接收到的消息内容
 		fmt.Printf("Received message: Key: %s, Value: %s\n", string(message.Key), string(message.Value))
 	}
 }

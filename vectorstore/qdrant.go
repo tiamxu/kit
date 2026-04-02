@@ -133,6 +133,9 @@ func (q *QdrantStore) ensureCollection(ctx context.Context) error {
 //
 //	error: 错误信息
 func (q *QdrantStore) AddDocuments(ctx context.Context, docs []schema.Document) error {
+	if q.store == nil {
+		return fmt.Errorf("store not initialized, call Initialize() first")
+	}
 	_, err := q.store.AddDocuments(ctx, docs)
 	return err
 }
@@ -149,6 +152,9 @@ func (q *QdrantStore) AddDocuments(ctx context.Context, docs []schema.Document) 
 //	[]schema.Document: 匹配的文档列表
 //	error: 错误信息
 func (q *QdrantStore) Search(ctx context.Context, query string, k int) ([]schema.Document, error) {
+	if q.store == nil {
+		return nil, fmt.Errorf("store not initialized, call Initialize() first")
+	}
 	return q.store.SimilaritySearch(ctx, query, k)
 }
 

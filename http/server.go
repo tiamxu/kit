@@ -356,13 +356,20 @@ func StartServer(router *gin.Engine, cfg GinServerConfig) (*http.Server, error) 
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
+	errChan := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Errorf("server listen error: %v", err)
+			errChan <- err
 		}
 	}()
 
-	return srv, nil
+	select {
+	case err := <-errChan:
+		return nil, err
+	case <-time.After(100 * time.Millisecond):
+		return srv, nil
+	}
 }
 
 func ShutdownServer(srv *http.Server) error {

@@ -22,24 +22,26 @@ type AppConfig struct {
 }
 
 type App struct {
-	root  *cobra.Command
-	tools map[string]Tool
-	cfg   AppConfig
+	root          *cobra.Command
+	tools         map[string]Tool
+	cfg           AppConfig
+	sharedContext *Context
 }
 
 func NewApp(cfg AppConfig) *App {
 	a := &App{
-		cfg:   cfg,
-		tools: make(map[string]Tool),
+		cfg:           cfg,
+		tools:         make(map[string]Tool),
+		sharedContext: &Context{Data: make(map[string]interface{})},
 	}
 
 	a.root = &cobra.Command{
 		Use:   cfg.Name,
 		Short: cfg.Description,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			a.sharedContext.Command = cmd
 			if cfg.PreRun != nil {
-				ctx := &Context{Command: cmd, Data: make(map[string]interface{})}
-				return cfg.PreRun(ctx)
+				return cfg.PreRun(a.sharedContext)
 			}
 			return nil
 		},
@@ -79,7 +81,7 @@ func (a *App) RegisterTool(tools ...Tool) *App {
 		}
 
 		for _, c := range t.Commands() {
-			cmd.AddCommand(c.build())
+			cmd.AddCommand(c.build(a))
 		}
 
 		a.root.AddCommand(cmd)
@@ -95,6 +97,7 @@ type Context struct {
 	*cobra.Command
 	Config interface{}
 	Data   map[string]interface{}
+	Args   []string
 }
 
 func (c *Context) String(name string) string {
@@ -179,7 +182,7 @@ func (c *Command) Hidden() *Command {
 	return c
 }
 
-func (c *Command) build() *cobra.Command {
+func (c *Command) build(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    c.name,
 		Short:  c.description,
@@ -196,12 +199,15 @@ func (c *Command) build() *cobra.Command {
 
 	if c.run != nil {
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return c.run(&Context{Command: cmd, Data: make(map[string]interface{})})
+			ctx := app.sharedContext
+			ctx.Command = cmd
+			ctx.Args = args
+			return c.run(ctx)
 		}
 	}
 
 	for _, sub := range c.subCommands {
-		cmd.AddCommand(sub.build())
+		cmd.AddCommand(sub.build(app))
 	}
 
 	return cmd
@@ -209,6 +215,7 @@ func (c *Command) build() *cobra.Command {
 
 type Flag interface {
 	Apply(cmd *cobra.Command)
+	markRequired(cmd *cobra.Command)
 }
 
 type stringFlag struct {
@@ -216,7 +223,6 @@ type stringFlag struct {
 	short      string
 	defaultVal string
 	usage      string
-	required   bool
 }
 
 func StringFlag(name, short, defaultVal, usage string) Flag {
@@ -229,9 +235,10 @@ func (f *stringFlag) Apply(cmd *cobra.Command) {
 	} else {
 		cmd.Flags().String(f.name, f.defaultVal, f.usage)
 	}
-	if f.required {
-		_ = cmd.MarkFlagRequired(f.name)
-	}
+}
+
+func (f *stringFlag) markRequired(cmd *cobra.Command) {
+	_ = cmd.MarkFlagRequired(f.name)
 }
 
 type intFlag struct {
@@ -239,7 +246,6 @@ type intFlag struct {
 	short      string
 	defaultVal int
 	usage      string
-	required   bool
 }
 
 func IntFlag(name, short string, defaultVal int, usage string) Flag {
@@ -252,9 +258,10 @@ func (f *intFlag) Apply(cmd *cobra.Command) {
 	} else {
 		cmd.Flags().Int(f.name, f.defaultVal, f.usage)
 	}
-	if f.required {
-		_ = cmd.MarkFlagRequired(f.name)
-	}
+}
+
+func (f *intFlag) markRequired(cmd *cobra.Command) {
+	_ = cmd.MarkFlagRequired(f.name)
 }
 
 type boolFlag struct {
@@ -276,12 +283,15 @@ func (f *boolFlag) Apply(cmd *cobra.Command) {
 	}
 }
 
+func (f *boolFlag) markRequired(cmd *cobra.Command) {
+	_ = cmd.MarkFlagRequired(f.name)
+}
+
 type durationFlag struct {
 	name       string
 	short      string
 	defaultVal time.Duration
 	usage      string
-	required   bool
 }
 
 func DurationFlag(name, short string, defaultVal time.Duration, usage string) Flag {
@@ -294,9 +304,10 @@ func (f *durationFlag) Apply(cmd *cobra.Command) {
 	} else {
 		cmd.Flags().Duration(f.name, f.defaultVal, f.usage)
 	}
-	if f.required {
-		_ = cmd.MarkFlagRequired(f.name)
-	}
+}
+
+func (f *durationFlag) markRequired(cmd *cobra.Command) {
+	_ = cmd.MarkFlagRequired(f.name)
 }
 
 type stringSliceFlag struct {
@@ -318,6 +329,10 @@ func (f *stringSliceFlag) Apply(cmd *cobra.Command) {
 	}
 }
 
+func (f *stringSliceFlag) markRequired(cmd *cobra.Command) {
+	_ = cmd.MarkFlagRequired(f.name)
+}
+
 type requiredFlag struct {
 	inner Flag
 }
@@ -328,4 +343,9 @@ func RequiredFlag(flag Flag) Flag {
 
 func (f *requiredFlag) Apply(cmd *cobra.Command) {
 	f.inner.Apply(cmd)
+	f.inner.markRequired(cmd)
+}
+
+func (f *requiredFlag) markRequired(cmd *cobra.Command) {
+	f.inner.markRequired(cmd)
 }

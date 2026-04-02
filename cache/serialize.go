@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"sync"
 )
@@ -65,7 +66,7 @@ func deserialize(data []byte, dest interface{}) error {
 		}
 		return json.Unmarshal(bs, dest)
 	default:
-		return nil
+		return fmt.Errorf("unknown cache flag: %d", item.Flag)
 	}
 }
 

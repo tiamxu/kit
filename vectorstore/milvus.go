@@ -202,6 +202,9 @@ func (m *MilvusStore) createCollection(ctx context.Context) error {
 //
 //	error: 错误信息
 func (m *MilvusStore) AddDocuments(ctx context.Context, docs []schema.Document) error {
+	if m.store == nil {
+		return fmt.Errorf("store not initialized, call Initialize() first")
+	}
 	_, err := m.store.AddDocuments(ctx, docs)
 	return err
 }
@@ -218,6 +221,9 @@ func (m *MilvusStore) AddDocuments(ctx context.Context, docs []schema.Document) 
 //	[]schema.Document: 匹配的文档列表
 //	error: 错误信息
 func (m *MilvusStore) Search(ctx context.Context, query string, k int) ([]schema.Document, error) {
+	if m.store == nil {
+		return nil, fmt.Errorf("store not initialized, call Initialize() first")
+	}
 	return m.store.SimilaritySearch(ctx, query, k)
 }
 

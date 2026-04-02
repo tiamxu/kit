@@ -78,7 +78,10 @@ func (c *Client) MGet(ctx context.Context, keys ...string) ([]*string, error) {
 		if v == nil {
 			values[i] = nil
 		} else {
-			s := v.(string)
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("expected string value for key %s, got %T", keys[i], v)
+			}
 			values[i] = &s
 		}
 	}

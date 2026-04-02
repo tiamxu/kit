@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -215,12 +216,16 @@ func (w *kafkaLogWriter) run() {
 	for {
 		select {
 		case msg := <-w.ch:
-			_ = w.producer.SendMessage(w.topic, nil, msg)
+			if err := w.producer.SendMessage(w.topic, nil, msg); err != nil {
+				log.Printf("kafka log writer send error: %v", err)
+			}
 		case <-w.done:
 			for {
 				select {
 				case msg := <-w.ch:
-					_ = w.producer.SendMessage(w.topic, nil, msg)
+					if err := w.producer.SendMessage(w.topic, nil, msg); err != nil {
+						log.Printf("kafka log writer send error: %v", err)
+					}
 				default:
 					return
 				}
@@ -454,16 +459,23 @@ func Fatalln(args ...interface{}) {
 	_sugar.Fatal(args...)
 }
 
-func Sync() {
+func Sync() error {
 	_mu.Lock()
 	defer _mu.Unlock()
+	var errs []error
 	if _kafkaWriter != nil {
-		_ = _kafkaWriter.Close()
+		if err := _kafkaWriter.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("kafka writer close error: %w", err))
+		}
 		_kafkaWriter = nil
 	}
 	if _logger != nil {
-		_ = _logger.Sync()
+		if err := _logger.Sync(); err != nil {
+			errs = append(errs, fmt.Errorf("logger sync error: %w", err))
+		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("multiple errors during sync: %v", errs)
+	}
+	return nil
 }
-
-var _ = time.Now()
