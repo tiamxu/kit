@@ -58,13 +58,12 @@ func Connect(dbConfig *Config) (*DB, error) {
 	}, nil
 }
 
-func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) error {
+func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err error) {
 	if fn == nil {
 		return nil
 	}
 
 	var _tx *sqlx.Tx
-	var err error
 	var needCommit bool
 	if len(tx) > 0 && tx[0] != nil {
 		_tx = tx[0]

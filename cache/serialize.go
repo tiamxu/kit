@@ -20,11 +20,26 @@ var (
 	}
 	gzipWriterPool = sync.Pool{
 		New: func() interface{} {
-			w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
-			return w
+			return &gzipWriterWrapper{
+				buf: bufferPool.Get().(*bytes.Buffer),
+			}
 		},
 	}
 )
+
+type gzipWriterWrapper struct {
+	buf *bytes.Buffer
+	w   *gzip.Writer
+}
+
+func (w *gzipWriterWrapper) reset() {
+	w.buf.Reset()
+	w.w.Reset(w.buf)
+}
+
+func newGzipWriter(buf *bytes.Buffer) *gzip.Writer {
+	return gzip.NewWriter(buf)
+}
 
 type cacheItem struct {
 	Flag uint32
@@ -100,25 +115,23 @@ func decodeItem(data []byte) (*cacheItem, error) {
 }
 
 func gzipCompress(data []byte) ([]byte, error) {
-	buf := bufferPool.Get().(*bytes.Buffer)
+	wrapper := gzipWriterPool.Get().(*gzipWriterWrapper)
+	wrapper.w = newGzipWriter(wrapper.buf)
 	defer func() {
-		buf.Reset()
-		bufferPool.Put(buf)
+		wrapper.w.Close()
+		wrapper.reset()
+		gzipWriterPool.Put(wrapper)
 	}()
 
-	gz := gzipWriterPool.Get().(*gzip.Writer)
-	defer gzipWriterPool.Put(gz)
-	gz.Reset(buf)
-
-	if _, err := gz.Write(data); err != nil {
+	if _, err := wrapper.w.Write(data); err != nil {
 		return nil, err
 	}
-	if err := gz.Close(); err != nil {
+	if err := wrapper.w.Close(); err != nil {
 		return nil, err
 	}
 
-	result := make([]byte, buf.Len())
-	copy(result, buf.Bytes())
+	result := make([]byte, wrapper.buf.Len())
+	copy(result, wrapper.buf.Bytes())
 	return result, nil
 }
 

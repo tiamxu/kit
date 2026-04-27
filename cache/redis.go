@@ -5,28 +5,70 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tiamxu/kit/redis"
 )
 
 const (
 	defaultCompressMinSize = 2048
-	lockScript            = `
-if redis.call("get", KEYS[1]) == false then
-    return 0
-end
+	lockScript             = `
 if redis.call("get", KEYS[1]) == ARGV[1] then
     return redis.call("del", KEYS[1])
 else
     return 0
 end
 `
+	unlockRefreshScript = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+`
 )
+
+type Lock interface {
+	Unlock(ctx context.Context) error
+	Refresh(ctx context.Context, ttl time.Duration) error
+}
+
+type RedisLock struct {
+	client *redis.Client
+	key    string
+	token  string
+}
+
+func (l *RedisLock) Unlock(ctx context.Context) error {
+	_, err := l.client.Eval(ctx, lockScript, []string{l.key}, l.token).Result()
+	return err
+}
+
+func (l *RedisLock) Refresh(ctx context.Context, ttl time.Duration) error {
+	_, err := l.client.Eval(ctx, unlockRefreshScript, []string{l.key}, l.token, ttl.Milliseconds()).Result()
+	return err
+}
+
+type lockConfig struct {
+	retryCount int
+	retryDelay time.Duration
+}
+
+type LockOption func(*lockConfig)
+
+func WithRetry(count int, delay time.Duration) LockOption {
+	return func(c *lockConfig) {
+		c.retryCount = count
+		c.retryDelay = delay
+	}
+}
+
+var defaultLockRetryCount = 3
+var defaultLockRetryDelay = 200 * time.Millisecond
 
 // RedisCache 基于Redis的缓存实现
 type RedisCache struct {
 	client *redis.Client
 	opts   Options
-	locks  map[string]string
 }
 
 // NewRedisCache 创建Redis缓存实例
@@ -37,7 +79,6 @@ func NewRedisCache(client *redis.Client, opts Options) *RedisCache {
 	return &RedisCache{
 		client: client,
 		opts:   opts,
-		locks:  make(map[string]string),
 	}
 }
 
@@ -90,7 +131,7 @@ func (c *RedisCache) MGet(ctx context.Context, keys ...string) (map[string]*stri
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	values, err := c.client.Client.MGet(ctx, keys...).Result()
+	values, err := c.client.MGet(ctx, keys...)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +140,7 @@ func (c *RedisCache) MGet(ctx context.Context, keys ...string) (map[string]*stri
 		if v == nil {
 			result[keys[i]] = nil
 		} else {
-			s, ok := v.(string)
-			if !ok {
-				return nil, fmt.Errorf("expected string value for key %s, got %T", keys[i], v)
-			}
-			result[keys[i]] = &s
+			result[keys[i]] = v
 		}
 	}
 	return result, nil
@@ -172,32 +209,37 @@ func (c *RedisCache) IncrBy(ctx context.Context, key string, value int64) (int64
 	return c.client.IncrBy(ctx, key, value).Result()
 }
 
-// TryLock 尝试获取分布式锁
-// 返回 true 表示获取成功，false 表示锁已被占用
-func (c *RedisCache) TryLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+// TryLock 尝试获取分布式锁，支持重试
+func (c *RedisCache) TryLock(ctx context.Context, key string, ttl time.Duration, opts ...LockOption) (Lock, error) {
 	lockKey := fmt.Sprintf("lock:%s", key)
-	token := fmt.Sprintf("%d", time.Now().UnixNano())
-	ok, err := c.client.SetNX(ctx, lockKey, token, ttl).Result()
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, nil
-	}
-	c.locks[lockKey] = token
-	return true, nil
-}
+	token := uuid.New().String()
 
-// Unlock 释放分布式锁（使用 Lua 脚本保证原子性）
-func (c *RedisCache) Unlock(ctx context.Context, key string) error {
-	lockKey := fmt.Sprintf("lock:%s", key)
-	token, ok := c.locks[lockKey]
-	if !ok {
-		return fmt.Errorf("lock not held for key: %s", key)
+	cfg := lockConfig{
+		retryCount: defaultLockRetryCount,
+		retryDelay: defaultLockRetryDelay,
 	}
-	delete(c.locks, lockKey)
-	_, err := c.client.Eval(ctx, lockScript, []string{lockKey}, token).Result()
-	return err
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	var err error
+	for i := 0; i < cfg.retryCount; i++ {
+		ok, err := c.client.SetNX(ctx, lockKey, token, ttl).Result()
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &RedisLock{
+				client: c.client,
+				key:    lockKey,
+				token:  token,
+			}, nil
+		}
+		if i < cfg.retryCount-1 {
+			time.Sleep(cfg.retryDelay)
+		}
+	}
+	return nil, fmt.Errorf("lock failed after %d retries: %w", cfg.retryCount, err)
 }
 
 // Close 关闭缓存连接
