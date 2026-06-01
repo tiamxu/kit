@@ -3,10 +3,11 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	kiterrors "github.com/tiamxu/kit/errors"
+	"github.com/tiamxu/kit/log"
 )
 
 // KafkaProducer 封装了使用segmentio/kafka-go的Kafka生产者
@@ -36,10 +37,10 @@ type Config struct {
 //	error: 错误信息
 func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	if len(cfg.Brokers) == 0 {
-		return nil, fmt.Errorf("brokers cannot be empty")
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "brokers cannot be empty", kiterrors.KafkaErrNoBrokers)
 	}
 	if cfg.Topic == "" {
-		return nil, fmt.Errorf("topic cannot be empty")
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "topic cannot be empty", kiterrors.KafkaErrTopic)
 	}
 
 	// 设置默认值
@@ -115,7 +116,7 @@ func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
 			time.Sleep(p.config.RetryInterval)
 		}
 	}
-	return fmt.Errorf("failed to send message after %d retries: %w", p.config.MaxRetries, lastErr)
+	return kiterrors.Wrap("KAFKA_PRODUCE", fmt.Sprintf("failed to send message after %d retries", p.config.MaxRetries), lastErr)
 }
 
 // KafkaConsumer 封装了使用segmentio/kafka-go的Kafka消费者
@@ -136,13 +137,13 @@ type KafkaConsumer struct {
 //	error: 错误信息
 func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaConsumer, error) {
 	if len(brokers) == 0 {
-		return nil, fmt.Errorf("brokers cannot be empty")
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "brokers cannot be empty", kiterrors.KafkaErrNoBrokers)
 	}
 	if topic == "" {
-		return nil, fmt.Errorf("topic cannot be empty")
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "topic cannot be empty", kiterrors.KafkaErrTopic)
 	}
 	if groupID == "" {
-		return nil, fmt.Errorf("groupID cannot be empty")
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "groupID cannot be empty", kiterrors.ErrInvalidParam)
 	}
 	// 创建Kafka reader配置
 	readerConfig := kafka.ReaderConfig{
@@ -161,20 +162,45 @@ func NewKafkaConsumer(brokers []string, topic string, groupID string) (*KafkaCon
 	}, nil
 }
 
-// ConsumeMessage 从Kafka消费消息
-func (c *KafkaConsumer) ConsumeMessage(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+// ConsumeMessage 从Kafka消费消息，返回消息channel
+// 调用方通过 channel 接收消息，处理完后调用 Ack
+func (c *KafkaConsumer) ConsumeMessage(ctx context.Context) (<-chan kafka.Message, error) {
+	msgChan := make(chan kafka.Message, 100)
+	go func() {
+		defer close(msgChan)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			msg, err := c.reader.FetchMessage(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Errorf("kafka fetch message error: %v", err)
+				continue
+			}
+			select {
+			case msgChan <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
-		message, err := c.reader.ReadMessage(ctx)
-		if err != nil {
-			log.Printf("found error from kafka reader: %v", err)
-			return err
-		}
+	}()
+	return msgChan, nil
+}
 
-		fmt.Printf("Received message: Key: %s, Value: %s\n", string(message.Key), string(message.Value))
+// Ack 确认消息已处理
+func (c *KafkaConsumer) Ack(ctx context.Context, msg kafka.Message) error {
+	return c.reader.CommitMessages(ctx, msg)
+}
+
+// Close 关闭消费者
+func (c *KafkaConsumer) Close() error {
+	if c.reader != nil {
+		return c.reader.Close()
 	}
+	return nil
 }

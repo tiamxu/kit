@@ -1,18 +1,20 @@
 package sql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	kiterrors "github.com/tiamxu/kit/errors"
 	"github.com/tiamxu/kit/log"
 )
 
 type DB struct {
 	*sqlx.DB
-	dbConfig *Config
 }
 
 func Connect(dbConfig *Config) (*DB, error) {
@@ -41,7 +43,7 @@ func Connect(dbConfig *Config) (*DB, error) {
 
 	db, err := sqlx.Connect(cfg.Driver, dsn)
 	if err != nil {
-		return nil, err
+		return nil, kiterrors.Wrap("SQL_CONNECT", "failed to connect to database", err)
 	}
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
@@ -49,12 +51,11 @@ func Connect(dbConfig *Config) (*DB, error) {
 	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
 
 	if err := db.Ping(); err != nil {
-		return nil, err
+		return nil, kiterrors.Wrap("SQL_PING", "failed to ping database", err)
 	}
 
 	return &DB{
-		DB:       db,
-		dbConfig: &cfg,
+		DB: db,
 	}, nil
 }
 
@@ -73,21 +74,74 @@ func (d *DB) TransactCallback(fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err erro
 			return err
 		}
 		needCommit = true
-		defer func() {
+	}
+
+	// panic safe
+	defer func() {
+		if r := recover(); r != nil {
 			if needCommit {
-				if err != nil {
-					if rErr := _tx.Rollback(); rErr != nil {
-						log.Errorf("error rolling back transaction: %v", rErr)
-					}
-				} else {
-					if rErr := _tx.Commit(); rErr != nil {
-						log.Errorf("error committing transaction: %v", rErr)
-						err = rErr
-					}
+				_ = _tx.Rollback()
+			}
+			err = kiterrors.Wrap("SQL_TRANSACTION", "transaction panic recovered", fmt.Errorf("%v", r))
+			return
+		}
+		if needCommit {
+			if err != nil {
+				if rErr := _tx.Rollback(); rErr != nil {
+					log.Errorf("error rolling back transaction: %v", rErr)
+				}
+			} else {
+				if rErr := _tx.Commit(); rErr != nil {
+					log.Errorf("error committing transaction: %v", rErr)
+					err = kiterrors.Wrap("SQL_COMMIT", "failed to commit transaction", rErr)
 				}
 			}
-		}()
+		}
+	}()
+
+	err = fn(_tx)
+	return err
+}
+
+func (d *DB) TransactCallbackCtx(ctx context.Context, fn func(*sqlx.Tx) error, tx ...*sqlx.Tx) (err error) {
+	if fn == nil {
+		return nil
 	}
+
+	var _tx *sqlx.Tx
+	var needCommit bool
+	if len(tx) > 0 && tx[0] != nil {
+		_tx = tx[0]
+	} else {
+		_tx, err = d.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		needCommit = true
+	}
+
+	// panic safe
+	defer func() {
+		if r := recover(); r != nil {
+			if needCommit {
+				_ = _tx.Rollback()
+			}
+			err = kiterrors.Wrap("SQL_TRANSACTION", "transaction panic recovered", fmt.Errorf("%v", r))
+			return
+		}
+		if needCommit {
+			if err != nil {
+				if rErr := _tx.Rollback(); rErr != nil {
+					log.Errorf("error rolling back transaction: %v", rErr)
+				}
+			} else {
+				if rErr := _tx.Commit(); rErr != nil {
+					log.Errorf("error committing transaction: %v", rErr)
+					err = kiterrors.Wrap("SQL_COMMIT", "failed to commit transaction", rErr)
+				}
+			}
+		}
+	}()
 
 	err = fn(_tx)
 	return err
@@ -97,9 +151,13 @@ func IsNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
 
+func (d *DB) Stats() sql.DBStats {
+	return d.DB.Stats()
+}
+
 type PreDB struct {
 	db     *DB
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	inited bool
 }
 
@@ -123,8 +181,8 @@ func (p *PreDB) Init(dbConfig *Config) error {
 }
 
 func (p *PreDB) DB() *DB {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if !p.inited {
 		return nil
 	}

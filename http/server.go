@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -10,10 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	kiterrors "github.com/tiamxu/kit/errors"
 	"github.com/tiamxu/kit/log"
 )
 
-type GinServerConfig struct {
+type ServerConfig struct {
 	Address         string        `yaml:"address" json:"address"`
 	KeepAlive       bool          `yaml:"keep_alive" json:"keep_alive"`
 	ReadTimeout     time.Duration `yaml:"read_timeout" json:"read_timeout"`
@@ -21,7 +23,8 @@ type GinServerConfig struct {
 	AccessLogFormat string        `yaml:"access_log_format" json:"access_log_format"`
 	StaticPrefix    string        `yaml:"static_prefix" json:"static_prefix"`
 	StaticDir       string        `yaml:"static_dir" json:"static_dir"`
-	BodyLimit       int64         `yaml:"body_limit" json:"body_limit"`
+	MultipartMemory int64         `yaml:"multipart_memory" json:"multipart_memory"` // 文件上传最大内存，默认32MB
+	BodyLimit       int64         `yaml:"body_limit" json:"body_limit"`             // 请求body最大限制
 	CORSConfig      *CORSConfig   `yaml:"cors" json:"cors"`
 }
 
@@ -34,14 +37,27 @@ type CORSConfig struct {
 	MaxAge           time.Duration `yaml:"max_age" json:"max_age"`
 }
 
-var DefaultAccessLogFormat = `${time} | ${status} | ${latency} | ${client_ip} | ${method} ${path} | ${request_id} | ${user_agent} | ${error}`
+var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}`
 
-func NewGin(cfg GinServerConfig) *gin.Engine {
+const (
+	defaultMultipartMemory = 32 << 20 // 32MB
+	defaultBodyLimit       = 8 << 20 // 8MB
+)
+
+func NewGin(cfg ServerConfig) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 
 	if len(cfg.AccessLogFormat) == 0 {
 		cfg.AccessLogFormat = DefaultAccessLogFormat
+	}
+
+	// 设置默认值
+	if cfg.MultipartMemory == 0 {
+		cfg.MultipartMemory = defaultMultipartMemory
+	}
+	if cfg.BodyLimit == 0 {
+		cfg.BodyLimit = defaultBodyLimit
 	}
 
 	router.Use(
@@ -56,9 +72,20 @@ func NewGin(cfg GinServerConfig) *gin.Engine {
 		router.Static(cfg.StaticPrefix, cfg.StaticDir)
 	}
 
-	router.MaxMultipartMemory = cfg.BodyLimit
+	// 文件上传最大内存
+	router.MaxMultipartMemory = cfg.MultipartMemory
+
+	// 请求body最大限制
+	router.Use(bodyLimitMiddleware(cfg.BodyLimit))
 
 	return router
+}
+
+func bodyLimitMiddleware(limit int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		c.Next()
+	}
 }
 
 func defaultCORSConfig() *CORSConfig {
@@ -107,10 +134,11 @@ func AccessLogMiddleware(format string) gin.HandlerFunc {
 			"status":       c.Writer.Status(),
 			"method":       c.Request.Method,
 			"path":         path,
-			"ip":           c.ClientIP(),
+			"client_ip":    c.ClientIP(),
 			"host":         c.Request.Host,
 			"request_id":   requestID,
 			"user_agent":   c.Request.UserAgent(),
+			"time":         time.Now().Format("2006-01-02 15:04:05"),
 			"request_time": fmt.Sprintf("%.3fs", float64(latency.Microseconds())/1e6),
 			"bytes_in":     requestSize,
 			"bytes_out":    c.Writer.Size(),
@@ -181,9 +209,22 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 		config.MaxAge = defaultConfig.MaxAge
 	}
 
+	// 处理 AllowOrigins 配置
 	allowedOrigins := make(map[string]bool)
+	wildcardSuffixes := make([]string, 0)
 	for _, origin := range config.AllowOrigins {
-		allowedOrigins[origin] = true
+		if origin == "*" {
+			allowedOrigins["*"] = true
+		} else if strings.HasPrefix(origin, "*.") {
+			wildcardSuffixes = append(wildcardSuffixes, strings.TrimPrefix(origin, "*"))
+		} else {
+			allowedOrigins[origin] = true
+		}
+	}
+
+	// 校验：AllowCredentials=true 时不能使用通配符 *
+	if config.AllowCredentials && allowedOrigins["*"] {
+		allowedOrigins["*"] = false
 	}
 
 	return func(c *gin.Context) {
@@ -193,18 +234,24 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 			return
 		}
 
-		if allowedOrigins["*"] || allowedOrigins[origin] {
-			c.Header("Access-Control-Allow-Origin", origin)
+		allowed := false
+		if allowedOrigins["*"] {
+			allowed = true
+		} else if allowedOrigins[origin] {
+			allowed = true
 		} else {
-			for allowedOrigin := range allowedOrigins {
-				if strings.HasPrefix(allowedOrigin, "*") {
-					domain := strings.TrimPrefix(allowedOrigin, "*")
-					if strings.HasSuffix(origin, domain) {
-						c.Header("Access-Control-Allow-Origin", origin)
-						break
-					}
+			// 严格匹配 *.domain.com 格式（通配符不能跨多个点）
+			for _, suffix := range wildcardSuffixes {
+				suffix := "." + suffix
+				if strings.HasSuffix(origin, suffix) && len(origin) > len(suffix) && origin[len(origin)-len(suffix)-1] == '.' {
+					allowed = true
+					break
 				}
 			}
+		}
+
+		if allowed {
+			c.Header("Access-Control-Allow-Origin", origin)
 		}
 
 		if c.Request.Method == "OPTIONS" {
@@ -230,7 +277,7 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 
 		done := make(chan struct{})
-		panicChan := make(chan interface{}, 1)
+		panicChan := make(chan any, 1)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -252,7 +299,7 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusRequestTimeout, gin.H{
 				"error": gin.H{
 					"type":    "request_timeout",
-					"message": "请求处理超时",
+					"message": "request timeout",
 					"code":    http.StatusRequestTimeout,
 				},
 			})
@@ -260,7 +307,7 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	}
 }
 
-type Error struct {
+type HTTPError struct {
 	Type       string            `json:"type"`
 	Message    string            `json:"message"`
 	Code       int               `json:"code"`
@@ -271,8 +318,8 @@ type Error struct {
 	Timestamp  string            `json:"timestamp"`
 }
 
-func NewError(c *gin.Context, errorType string, message string, code int) *Error {
-	return &Error{
+func NewHTTPError(c *gin.Context, errorType string, message string, code int) *HTTPError {
+	return &HTTPError{
 		Type:      errorType,
 		Message:   message,
 		Code:      code,
@@ -298,11 +345,11 @@ func ErrorHandler() gin.HandlerFunc {
 		}
 
 		err := c.Errors[0]
-		var apiError *Error
+		var apiError *HTTPError
 
 		switch err.Type {
 		case gin.ErrorTypeBind:
-			apiError = NewError(c, "invalid_request", "请求参数格式错误", http.StatusBadRequest)
+			apiError = NewHTTPError(c, "invalid_request", "invalid request parameters", http.StatusBadRequest)
 			if validationErr, ok := err.Err.(validator.ValidationErrors); ok {
 				apiError.Validation = make(map[string]string)
 				for _, fieldErr := range validationErr {
@@ -310,26 +357,26 @@ func ErrorHandler() gin.HandlerFunc {
 				}
 			}
 		case gin.ErrorTypeRender:
-			apiError = NewError(c, "render_error", "响应渲染失败", http.StatusInternalServerError)
+			apiError = NewHTTPError(c, "render_error", "response render failed", http.StatusInternalServerError)
 		case gin.ErrorTypePrivate:
-			apiError = NewError(c, "internal_error", "服务器内部错误", http.StatusInternalServerError)
+			apiError = NewHTTPError(c, "internal_error", "internal server error", http.StatusInternalServerError)
 		case gin.ErrorTypePublic:
 			switch {
 			case strings.Contains(err.Error(), "not found"):
-				apiError = NewError(c, "not_found", "请求的资源不存在", http.StatusNotFound)
+				apiError = NewHTTPError(c, "not_found", "resource not found", http.StatusNotFound)
 			case strings.Contains(err.Error(), "unauthorized"):
-				apiError = NewError(c, "unauthorized", "未授权的访问", http.StatusUnauthorized)
+				apiError = NewHTTPError(c, "unauthorized", "unauthorized access", http.StatusUnauthorized)
 			case strings.Contains(err.Error(), "forbidden"):
-				apiError = NewError(c, "forbidden", "禁止访问", http.StatusForbidden)
+				apiError = NewHTTPError(c, "forbidden", "access forbidden", http.StatusForbidden)
 			case strings.Contains(err.Error(), "timeout"):
-				apiError = NewError(c, "timeout", "请求超时", http.StatusRequestTimeout)
+				apiError = NewHTTPError(c, "timeout", "request timeout", http.StatusRequestTimeout)
 			case strings.Contains(err.Error(), "validation"):
-				apiError = NewError(c, "validation_error", "数据验证失败", http.StatusUnprocessableEntity)
+				apiError = NewHTTPError(c, "validation_error", "validation failed", http.StatusUnprocessableEntity)
 			default:
-				apiError = NewError(c, "unknown_error", "未知错误", http.StatusInternalServerError)
+				apiError = NewHTTPError(c, "unknown_error", "unknown error", http.StatusInternalServerError)
 			}
 		default:
-			apiError = NewError(c, "unknown_error", "未知错误", http.StatusInternalServerError)
+			apiError = NewHTTPError(c, "unknown_error", "unknown error", http.StatusInternalServerError)
 		}
 
 		log.WithFields(log.Fields{
@@ -348,7 +395,7 @@ func ErrorHandler() gin.HandlerFunc {
 	}
 }
 
-func StartServer(router *gin.Engine, cfg GinServerConfig) (*http.Server, error) {
+func NewServer(router *gin.Engine, cfg ServerConfig) (*http.Server, error) {
 	srv := &http.Server{
 		Addr:         cfg.Address,
 		Handler:      router,
@@ -356,17 +403,26 @@ func StartServer(router *gin.Engine, cfg GinServerConfig) (*http.Server, error) 
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
+	// 尝试启动监听
+	listener, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		return nil, kiterrors.Wrap("HTTP_START", "failed to listen on "+cfg.Address, err)
+	}
+
+	// 关闭临时 listener，让 srv 接管
+	listener.Close()
+
 	errChan := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("server listen error: %v", err)
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
 
+	// 确认服务器已启动
 	select {
 	case err := <-errChan:
-		return nil, err
+		return nil, kiterrors.Wrap("HTTP_START", "server error", err)
 	case <-time.After(100 * time.Millisecond):
 		return srv, nil
 	}

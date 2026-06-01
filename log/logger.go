@@ -3,55 +3,43 @@ package log
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/natefinch/lumberjack"
-	"github.com/tiamxu/kit/kafka"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const (
-	defaultMaxSize           = 100
-	defaultMaxBackups        = 5
-	defaultMaxAge            = 30
-	defaultKafkaBatchSize    = 10000
-	defaultKafkaBatchTimeout = 5 * time.Second
-	defaultKafkaChanSize     = 10000
+	defaultMaxSize    = 100
+	defaultMaxBackups = 5
+	defaultMaxAge     = 30
 )
 
 type Config struct {
-	Level      string       `yaml:"level" json:"level"`
-	FilePath   string       `yaml:"file_path" json:"file_path"`
-	FileName   string       `yaml:"file_name" json:"file_name"`
-	MaxSize    int          `yaml:"max_size" json:"max_size"`
-	MaxBackups int          `yaml:"max_backups" json:"max_backups"`
-	MaxAge     int          `yaml:"max_age" json:"max_age"`
-	Compress   bool         `yaml:"compress" json:"compress"`
-	Type       string       `yaml:"type" json:"type"`
-	Format     string       `yaml:"format" json:"format"`
-	Kafka      kafka.Config `yaml:"kafka" json:"kafka"`
+	Level      string `yaml:"level" json:"level"`
+	FilePath   string `yaml:"file_path" json:"file_path"`
+	FileName   string `yaml:"file_name" json:"file_name"`
+	MaxSize    int    `yaml:"max_size" json:"max_size"`
+	MaxBackups int    `yaml:"max_backups" json:"max_backups"`
+	MaxAge     int    `yaml:"max_age" json:"max_age"`
+	Compress   bool   `yaml:"compress" json:"compress"`
+	Type       string `yaml:"type" json:"type"`
+	Format     string `yaml:"format" json:"format"`
 }
 
-type Fields = map[string]interface{}
+type Fields = map[string]any
 
 var (
-	_sugar       *zap.SugaredLogger
-	_logger      *zap.Logger
-	_mu          sync.RWMutex
-	_fields      Fields
-	_kafkaWriter *kafkaLogWriter
+	Sugar   *zap.SugaredLogger
+	Logger  *zap.Logger
+	_fields Fields
 )
 
 func InitLogger(cfg *Config) error {
-	_mu.Lock()
-	defer _mu.Unlock()
-
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
@@ -101,13 +89,6 @@ func InitLogger(cfg *Config) error {
 				return fmt.Errorf("setup file output: %w", err)
 			}
 			cores = append(cores, fileCore)
-		case "kafka":
-			kafkaCore, writer, err := buildKafkaCore(cfg, enabler)
-			if err != nil {
-				return fmt.Errorf("setup kafka output: %w", err)
-			}
-			_kafkaWriter = writer
-			cores = append(cores, kafkaCore)
 		default:
 			return fmt.Errorf("unknown output type: %s", part)
 		}
@@ -118,8 +99,8 @@ func InitLogger(cfg *Config) error {
 	}
 
 	core := zapcore.NewTee(cores...)
-	_logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	_sugar = _logger.Sugar()
+	Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+	Sugar = Logger.Sugar()
 
 	return nil
 }
@@ -157,109 +138,6 @@ func buildFileCore(cfg *Config, encoder zapcore.Encoder, enabler zapcore.LevelEn
 	return zapcore.NewCore(encoder, zapcore.AddSync(writer), enabler), nil
 }
 
-func buildKafkaCore(cfg *Config, enabler zapcore.LevelEnabler) (zapcore.Core, *kafkaLogWriter, error) {
-	kafkaCfg := cfg.Kafka
-	if len(kafkaCfg.Brokers) == 0 {
-		return nil, nil, fmt.Errorf("kafka brokers is required")
-	}
-	if kafkaCfg.Topic == "" {
-		return nil, nil, fmt.Errorf("kafka topic is required")
-	}
-	if kafkaCfg.BatchSize <= 0 {
-		kafkaCfg.BatchSize = defaultKafkaBatchSize
-	}
-	if kafkaCfg.BatchTimeout <= 0 {
-		kafkaCfg.BatchTimeout = defaultKafkaBatchTimeout
-	}
-
-	producer, err := kafka.NewKafkaProducer(&kafkaCfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create kafka producer: %w", err)
-	}
-
-	writer := &kafkaLogWriter{
-		producer: producer,
-		topic:    kafkaCfg.Topic,
-		ch:       make(chan []byte, defaultKafkaChanSize),
-		done:     make(chan struct{}),
-	}
-	go writer.run()
-
-	// Kafka 端强制使用 JSON 格式，方便下游消费
-	kafkaEncoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		FunctionKey:    zapcore.OmitKey,
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.LowercaseLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	})
-
-	core := zapcore.NewCore(kafkaEncoder, zapcore.AddSync(writer), enabler)
-	return core, writer, nil
-}
-
-type kafkaLogWriter struct {
-	producer *kafka.KafkaProducer
-	topic    string
-	ch       chan []byte
-	done     chan struct{}
-}
-
-func (w *kafkaLogWriter) run() {
-	for {
-		select {
-		case msg := <-w.ch:
-			if err := w.producer.SendMessage(w.topic, nil, msg); err != nil {
-				log.Printf("kafka log writer send error: %v", err)
-			}
-		case <-w.done:
-			for {
-				select {
-				case msg := <-w.ch:
-					if err := w.producer.SendMessage(w.topic, nil, msg); err != nil {
-						log.Printf("kafka log writer send error: %v", err)
-					}
-				default:
-					return
-				}
-			}
-		}
-	}
-}
-
-func (w *kafkaLogWriter) Write(p []byte) (n int, err error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	cp := make([]byte, len(p))
-	copy(cp, p)
-	select {
-	case w.ch <- cp:
-		return len(p), nil
-	default:
-		return len(p), nil
-	}
-}
-
-func (w *kafkaLogWriter) Close() error {
-	close(w.done)
-	for {
-		select {
-		case <-w.ch:
-		default:
-			close(w.ch)
-			return w.producer.Close()
-		}
-	}
-}
-
 func parseLevel(level string) (zapcore.Level, error) {
 	switch strings.ToLower(level) {
 	case "debug", "debug1":
@@ -279,47 +157,37 @@ func parseLevel(level string) (zapcore.Level, error) {
 	}
 }
 
-func ensureLogger() {
-	_mu.RLock()
-	if _sugar != nil {
-		_mu.RUnlock()
-		return
-	}
-	_mu.RUnlock()
+var _once sync.Once
 
-	_mu.Lock()
-	defer _mu.Unlock()
-	if _sugar != nil {
-		return
-	}
-	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
-		TimeKey:      "time",
-		LevelKey:     "level",
-		NameKey:      "logger",
-		CallerKey:    "caller",
-		MessageKey:   "msg",
-		LineEnding:   zapcore.DefaultLineEnding,
-		EncodeLevel:  zapcore.LowercaseLevelEncoder,
-		EncodeTime:   zapcore.ISO8601TimeEncoder,
-		EncodeCaller: zapcore.ShortCallerEncoder,
+func ensureLogger() {
+	_once.Do(func() {
+		encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+			TimeKey:      "time",
+			LevelKey:     "level",
+			NameKey:      "logger",
+			CallerKey:    "caller",
+			MessageKey:   "msg",
+			LineEnding:   zapcore.DefaultLineEnding,
+			EncodeLevel:  zapcore.LowercaseLevelEncoder,
+			EncodeTime:   zapcore.ISO8601TimeEncoder,
+			EncodeCaller: zapcore.ShortCallerEncoder,
+		})
+		core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zap.InfoLevel)
+		Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+		Sugar = Logger.Sugar()
 	})
-	core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zap.InfoLevel)
-	_logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	_sugar = _logger.Sugar()
 }
 
 func GetLogger() *zap.SugaredLogger {
 	ensureLogger()
-	return _sugar
+	return Sugar
 }
 
 func SetGlobalFields(fields Fields) {
-	_mu.Lock()
-	defer _mu.Unlock()
 	_fields = fields
 }
 
-func getMergedFields(fields Fields) []interface{} {
+func getMergedFields(fields Fields) []any {
 	if len(_fields) == 0 {
 		return fieldsToArgs(fields)
 	}
@@ -333,11 +201,11 @@ func getMergedFields(fields Fields) []interface{} {
 	return fieldsToArgs(merged)
 }
 
-func fieldsToArgs(fields Fields) []interface{} {
+func fieldsToArgs(fields Fields) []any {
 	if len(fields) == 0 {
 		return nil
 	}
-	args := make([]interface{}, 0, len(fields)*2)
+	args := make([]any, 0, len(fields)*2)
 	for k, v := range fields {
 		args = append(args, k, v)
 	}
@@ -351,19 +219,19 @@ type SugaredEntry struct {
 func WithFields(fields Fields) *SugaredEntry {
 	ensureLogger()
 	args := getMergedFields(fields)
-	return &SugaredEntry{sugar: _sugar.With(args...)}
+	return &SugaredEntry{sugar: Sugar.With(args...)}
 }
 
 func WithContext(ctx context.Context) *SugaredEntry {
 	ensureLogger()
-	args := []interface{}{}
+	args := []any{}
 	if requestID := ctx.Value("request_id"); requestID != nil {
 		args = append(args, "request_id", requestID)
 	}
 	if traceID := ctx.Value("trace_id"); traceID != nil {
 		args = append(args, "trace_id", traceID)
 	}
-	return &SugaredEntry{sugar: _sugar.With(args...)}
+	return &SugaredEntry{sugar: Sugar.With(args...)}
 }
 
 func (e *SugaredEntry) Info(msg string)                           { e.sugar.Infow(msg) }
@@ -372,110 +240,96 @@ func (e *SugaredEntry) Error(msg string)                          { e.sugar.Erro
 func (e *SugaredEntry) Debug(msg string)                          { e.sugar.Debugw(msg) }
 func (e *SugaredEntry) Fatal(msg string)                          { e.sugar.Fatalw(msg) }
 func (e *SugaredEntry) Panic(msg string)                          { e.sugar.Panicw(msg) }
-func (e *SugaredEntry) Infof(format string, args ...interface{})  { e.sugar.Infof(format, args...) }
-func (e *SugaredEntry) Warnf(format string, args ...interface{})  { e.sugar.Warnf(format, args...) }
-func (e *SugaredEntry) Errorf(format string, args ...interface{}) { e.sugar.Errorf(format, args...) }
-func (e *SugaredEntry) Debugf(format string, args ...interface{}) { e.sugar.Debugf(format, args...) }
-func (e *SugaredEntry) Fatalf(format string, args ...interface{}) { e.sugar.Fatalf(format, args...) }
-func (e *SugaredEntry) Panicf(format string, args ...interface{}) { e.sugar.Panicf(format, args...) }
+func (e *SugaredEntry) Infof(format string, args ...any)         { e.sugar.Infof(format, args...) }
+func (e *SugaredEntry) Warnf(format string, args ...any)          { e.sugar.Warnf(format, args...) }
+func (e *SugaredEntry) Errorf(format string, args ...any)        { e.sugar.Errorf(format, args...) }
+func (e *SugaredEntry) Debugf(format string, args ...any)         { e.sugar.Debugf(format, args...) }
+func (e *SugaredEntry) Fatalf(format string, args ...any)         { e.sugar.Fatalf(format, args...) }
+func (e *SugaredEntry) Panicf(format string, args ...any)         { e.sugar.Panicf(format, args...) }
 
-func Tracef(format string, args ...interface{}) {
+func Tracef(format string, args ...any) {
 	ensureLogger()
-	_sugar.Debugf(format, args...)
+	Sugar.Debugf(format, args...)
 }
 
-func Traceln(args ...interface{}) {
+func Traceln(args ...any) {
 	ensureLogger()
-	_sugar.Debug(args...)
+	Sugar.Debug(args...)
 }
 
-func Debugf(format string, args ...interface{}) {
+func Debugf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Debugf(format, args...)
+	Sugar.Debugf(format, args...)
 }
 
-func Debugln(args ...interface{}) {
+func Debugln(args ...any) {
 	ensureLogger()
-	_sugar.Debug(args...)
+	Sugar.Debug(args...)
 }
 
-func Printf(format string, args ...interface{}) {
+func Printf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Infof(format, args...)
+	Sugar.Infof(format, args...)
 }
 
-func Println(args ...interface{}) {
+func Println(args ...any) {
 	ensureLogger()
-	_sugar.Info(args...)
+	Sugar.Info(args...)
 }
 
-func Infof(format string, args ...interface{}) {
+func Infof(format string, args ...any) {
 	ensureLogger()
-	_sugar.Infof(format, args...)
+	Sugar.Infof(format, args...)
 }
 
-func Infoln(args ...interface{}) {
+func Infoln(args ...any) {
 	ensureLogger()
-	_sugar.Info(args...)
+	Sugar.Info(args...)
 }
 
-func Warnf(format string, args ...interface{}) {
+func Warnf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Warnf(format, args...)
+	Sugar.Warnf(format, args...)
 }
 
-func Warnln(args ...interface{}) {
+func Warnln(args ...any) {
 	ensureLogger()
-	_sugar.Warn(args...)
+	Sugar.Warn(args...)
 }
 
-func Errorf(format string, args ...interface{}) {
+func Errorf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Errorf(format, args...)
+	Sugar.Errorf(format, args...)
 }
 
-func Errorln(args ...interface{}) {
+func Errorln(args ...any) {
 	ensureLogger()
-	_sugar.Error(args...)
+	Sugar.Error(args...)
 }
 
-func Panicf(format string, args ...interface{}) {
+func Panicf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Panicf(format, args...)
+	Sugar.Panicf(format, args...)
 }
 
-func Panicln(args ...interface{}) {
+func Panicln(args ...any) {
 	ensureLogger()
-	_sugar.Panic(args...)
+	Sugar.Panic(args...)
 }
 
-func Fatalf(format string, args ...interface{}) {
+func Fatalf(format string, args ...any) {
 	ensureLogger()
-	_sugar.Fatalf(format, args...)
+	Sugar.Fatalf(format, args...)
 }
 
-func Fatalln(args ...interface{}) {
+func Fatalln(args ...any) {
 	ensureLogger()
-	_sugar.Fatal(args...)
+	Sugar.Fatal(args...)
 }
 
 func Sync() error {
-	_mu.Lock()
-	defer _mu.Unlock()
-	var errs []error
-	if _kafkaWriter != nil {
-		if err := _kafkaWriter.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("kafka writer close error: %w", err))
-		}
-		_kafkaWriter = nil
-	}
-	if _logger != nil {
-		if err := _logger.Sync(); err != nil {
-			errs = append(errs, fmt.Errorf("logger sync error: %w", err))
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("multiple errors during sync: %v", errs)
+	if Logger != nil {
+		return Logger.Sync()
 	}
 	return nil
 }
