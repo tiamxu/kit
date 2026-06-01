@@ -101,8 +101,6 @@ func (c *Client) Close() error {
 
 var CacheErrNotFound = kiterrors.CacheErrNotFound
 
-var ErrNotFound = CacheErrNotFound
-
 func IsNotFound(err error) bool {
 	return kiterrors.IsNotFound(err)
 }

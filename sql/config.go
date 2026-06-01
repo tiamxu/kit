@@ -97,6 +97,6 @@ func (cfg *Config) clickHouseSource() string {
 	if cfg.Port == 0 {
 		cfg.Port = 9000
 	}
-	return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s&read_timeout=%d&write_timeout=%d",
-		cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database, cfg.ReadTimeout, cfg.WriteTimeout)
+	return fmt.Sprintf("clickhouse://%s:%d?username=%s&database=%s&read_timeout=%d&write_timeout=%d",
+		cfg.Host, cfg.Port, cfg.Username, cfg.Database, cfg.ReadTimeout, cfg.WriteTimeout)
 }

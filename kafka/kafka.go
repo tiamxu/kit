@@ -43,7 +43,19 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 		return nil, kiterrors.Wrap("KAFKA_PARAM", "topic cannot be empty", kiterrors.KafkaErrTopic)
 	}
 
-	// 设置默认值
+	applyDefaults(cfg)
+
+	writerConfig := buildWriterConfig(cfg)
+	writer := kafka.NewWriter(writerConfig)
+	writer.AllowAutoTopicCreation = true
+
+	return &KafkaProducer{
+		writer: writer,
+		config: cfg,
+	}, nil
+}
+
+func applyDefaults(cfg *Config) {
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = 3
 	}
@@ -56,25 +68,16 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 	if cfg.BatchSize == 0 {
 		cfg.BatchSize = 100
 	}
+}
 
-	// 创建Kafka writer配置
-	writerConfig := kafka.WriterConfig{
+func buildWriterConfig(cfg *Config) kafka.WriterConfig {
+	return kafka.WriterConfig{
 		Brokers:      cfg.Brokers,
 		Balancer:     &kafka.LeastBytes{},
 		BatchTimeout: cfg.BatchTimeout,
 		BatchSize:    cfg.BatchSize,
 		Async:        true,
 	}
-
-	// 创建Kafka writer实例
-	writer := kafka.NewWriter(writerConfig)
-	// 自动创建topic
-	writer.AllowAutoTopicCreation = true
-
-	return &KafkaProducer{
-		writer: writer,
-		config: cfg,
-	}, nil
 }
 
 // Close 关闭Kafka生产者
@@ -88,7 +91,7 @@ func (p *KafkaProducer) Close() error {
 	return nil
 }
 
-// SendMessage 发送消息到Kafka
+// SendMessage 发送消息到Kafka（带超时控制）
 // 参数:
 //
 //	topic: 主题
@@ -99,19 +102,29 @@ func (p *KafkaProducer) Close() error {
 //
 //	error: 错误信息
 func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
-	message := kafka.Message{
+	return p.SendMessageCtx(context.Background(), topic, key, value)
+}
+
+func (p *KafkaProducer) SendMessageCtx(ctx context.Context, topic string, key, value []byte) error {
+	msg := kafka.Message{
 		Topic: topic,
 		Key:   key,
 		Value: value,
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	var lastErr error
 	for i := 0; i < p.config.MaxRetries; i++ {
-		err := p.writer.WriteMessages(context.Background(), message)
+		err := p.writer.WriteMessages(ctx, msg)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
+		if ctx.Err() != nil {
+			return kiterrors.Wrap("KAFKA_PRODUCE", "context cancelled", err)
+		}
 		if i < p.config.MaxRetries-1 {
 			time.Sleep(p.config.RetryInterval)
 		}

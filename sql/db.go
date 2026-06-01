@@ -148,7 +148,10 @@ func (d *DB) TransactCallbackCtx(ctx context.Context, fn func(*sqlx.Tx) error, t
 }
 
 func IsNoRows(err error) bool {
-	return errors.Is(err, sql.ErrNoRows)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	return false
 }
 
 func (d *DB) Stats() sql.DBStats {
