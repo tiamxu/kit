@@ -395,44 +395,38 @@ func ErrorHandler() gin.HandlerFunc {
 	}
 }
 
-func NewServer(router *gin.Engine, cfg ServerConfig) (*http.Server, error) {
+// Server 封装 gin.Engine 和 http.Server，提供统一的生命周期管理
+type Server struct {
+	*gin.Engine
+	srv *http.Server
+}
+
+// NewServer 创建服务实例，内部创建路由引擎并启动监听
+func NewServer(cfg ServerConfig) (*Server, error) {
+	engine := NewGin(cfg)
+
 	srv := &http.Server{
 		Addr:         cfg.Address,
-		Handler:      router,
+		Handler:      engine,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
-	// 尝试启动监听
 	listener, err := net.Listen("tcp", cfg.Address)
 	if err != nil {
 		return nil, kiterrors.Wrap("HTTP_START", "failed to listen on "+cfg.Address, err)
 	}
 
-	// 关闭临时 listener，让 srv 接管
-	listener.Close()
-
-	errChan := make(chan error, 1)
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
-			errChan <- err
+			log.Errorf("server serve error: %v", err)
 		}
 	}()
 
-	// 确认服务器已启动
-	select {
-	case err := <-errChan:
-		return nil, kiterrors.Wrap("HTTP_START", "server error", err)
-	case <-time.After(100 * time.Millisecond):
-		return srv, nil
-	}
+	return &Server{Engine: engine, srv: srv}, nil
 }
 
-func ShutdownServer(srv *http.Server) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		return fmt.Errorf("server shutdown error: %w", err)
-	}
-	return nil
+// Shutdown 优雅关闭服务
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.srv.Shutdown(ctx)
 }
