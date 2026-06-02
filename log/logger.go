@@ -34,9 +34,10 @@ type Config struct {
 type Fields = map[string]any
 
 var (
-	Sugar   *zap.SugaredLogger
-	Logger  *zap.Logger
-	_fields Fields
+	Sugar       *zap.SugaredLogger
+	Logger      *zap.Logger
+	_fields     Fields
+	globalFormat string // 日志格式：json 或 console
 )
 
 func InitLogger(cfg *Config) error {
@@ -47,6 +48,7 @@ func InitLogger(cfg *Config) error {
 
 	outputType := strings.ToLower(cfg.Type)
 	format := strings.ToLower(cfg.Format)
+	globalFormat = format
 
 	var cores []zapcore.Core
 
@@ -161,21 +163,29 @@ var _once sync.Once
 
 func ensureLogger() {
 	_once.Do(func() {
-		encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+		encoderConfig := zapcore.EncoderConfig{
 			TimeKey:      "time",
 			LevelKey:     "level",
 			NameKey:      "logger",
 			CallerKey:    "caller",
+			FunctionKey:  zapcore.OmitKey,
 			MessageKey:   "msg",
+			StacktraceKey: "stacktrace",
 			LineEnding:   zapcore.DefaultLineEnding,
-			EncodeLevel:  zapcore.LowercaseLevelEncoder,
+			EncodeLevel:  zapcore.CapitalColorLevelEncoder,
 			EncodeTime:   zapcore.ISO8601TimeEncoder,
+			EncodeDuration: zapcore.SecondsDurationEncoder,
 			EncodeCaller: zapcore.ShortCallerEncoder,
-		})
+		}
+		encoder := zapcore.NewConsoleEncoder(encoderConfig)
 		core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zap.InfoLevel)
 		Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 		Sugar = Logger.Sugar()
 	})
+}
+
+func GetGlobalFormat() string {
+	return globalFormat
 }
 
 func GetLogger() *zap.SugaredLogger {

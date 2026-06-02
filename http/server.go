@@ -76,12 +76,13 @@ func NewGin(cfg ServerConfig) *gin.Engine {
 	router.MaxMultipartMemory = cfg.MultipartMemory
 
 	// 请求body最大限制
-	router.Use(bodyLimitMiddleware(cfg.BodyLimit))
+	router.Use(bodyLimitHandler(cfg.BodyLimit))
 
 	return router
 }
 
-func bodyLimitMiddleware(limit int64) gin.HandlerFunc {
+// bodyLimitHandler 限制请求 body 大小
+func bodyLimitHandler(limit int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		c.Next()
@@ -156,30 +157,25 @@ func AccessLogMiddleware(format string) gin.HandlerFunc {
 		if proto := c.Request.Proto; proto != "" {
 			fields["protocol"] = proto
 		}
+		fields["error"] = ""
+		fields["error_count"] = 0
 		if len(c.Errors) > 0 {
 			fields["error"] = c.Errors.String()
 			fields["error_count"] = len(c.Errors)
 		}
 
-		if format == DefaultAccessLogFormat {
-			statusCode := c.Writer.Status()
-			logger := log.WithFields(fields)
-			switch {
-			case statusCode >= 500:
-				logger.Error("server error")
-			case statusCode >= 400:
-				logger.Warn("client error")
-			case statusCode >= 300:
-				logger.Info("redirect")
-			default:
-				logger.Info("success")
-			}
+		logMsg := format
+		if logMsg == "" {
+			logMsg = DefaultAccessLogFormat
+		}
+		for k, v := range fields {
+			placeholder := "${" + k + "}"
+			logMsg = strings.ReplaceAll(logMsg, placeholder, fmt.Sprintf("%v", v))
+		}
+
+		if log.GetGlobalFormat() == "json" {
+			log.WithFields(fields).Info("access")
 		} else {
-			logMsg := format
-			for k, v := range fields {
-				placeholder := "${" + k + "}"
-				logMsg = strings.ReplaceAll(logMsg, placeholder, fmt.Sprintf("%v", v))
-			}
 			log.Infoln(logMsg)
 		}
 	}
@@ -242,8 +238,8 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 		} else {
 			// 严格匹配 *.domain.com 格式（通配符不能跨多个点）
 			for _, suffix := range wildcardSuffixes {
-				suffix := "." + suffix
-				if strings.HasSuffix(origin, suffix) && len(origin) > len(suffix) && origin[len(origin)-len(suffix)-1] == '.' {
+				fullSuffix := "." + suffix
+				if strings.HasSuffix(origin, fullSuffix) && len(origin) > len(fullSuffix) && origin[len(origin)-len(fullSuffix)-1] == '.' {
 					allowed = true
 					break
 				}
@@ -281,7 +277,10 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					panicChan <- r
+					select {
+					case panicChan <- r:
+					default:
+					}
 				}
 				close(done)
 			}()
@@ -344,6 +343,11 @@ func ErrorHandler() gin.HandlerFunc {
 			return
 		}
 
+		// 收集所有错误信息
+		var errMsgs []string
+		for _, e := range c.Errors {
+			errMsgs = append(errMsgs, e.Error())
+		}
 		err := c.Errors[0]
 		var apiError *HTTPError
 
@@ -379,15 +383,23 @@ func ErrorHandler() gin.HandlerFunc {
 			apiError = NewHTTPError(c, "unknown_error", "unknown error", http.StatusInternalServerError)
 		}
 
-		log.WithFields(log.Fields{
-			"error_type": apiError.Type,
-			"status":     apiError.Code,
-			"path":       apiError.Context["path"],
-			"method":     apiError.Context["method"],
-			"client_ip":  apiError.Context["client_ip"],
-			"user_agent": apiError.Context["user_agent"],
-			"request_id": apiError.RequestID,
-		}).Error(err.Error())
+		if log.GetGlobalFormat() == "json" {
+			log.WithFields(log.Fields{
+				"error_type":  apiError.Type,
+				"status":      apiError.Code,
+				"path":        apiError.Context["path"],
+				"method":      apiError.Context["method"],
+				"client_ip":   apiError.Context["client_ip"],
+				"user_agent":  apiError.Context["user_agent"],
+				"request_id":  apiError.RequestID,
+				"error_count": len(errMsgs),
+				"errors":      strings.Join(errMsgs, "; "),
+			}).Error(strings.Join(errMsgs, "; "))
+		} else {
+			log.Errorf("[http] errors: %s | path: %s | method: %s | status: %d | client_ip: %s",
+				strings.Join(errMsgs, "; "), apiError.Context["path"], apiError.Context["method"],
+				apiError.Code, apiError.Context["client_ip"])
+		}
 
 		c.JSON(apiError.Code, gin.H{
 			"error": apiError,

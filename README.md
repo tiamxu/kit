@@ -282,10 +282,7 @@ log.Logger.Info("msg", zap.String("k", "v"))
 基于 Gin，提供中间件和优雅关闭。
 
 ```go
-import (
-    "github.com/gin-gonic/gin"
-    "github.com/tiamxu/kit/http"
-)
+import "github.com/tiamxu/kit/http"
 
 cfg := http.ServerConfig{
     Address:         ":8080",
@@ -295,42 +292,37 @@ cfg := http.ServerConfig{
     BodyLimit:       8 << 20,  // 8MB
 }
 
-router := http.NewGin(cfg)
-
-// 添加中间件
-router.Use(http.RequestIDMiddleware())
-router.Use(http.TimeoutMiddleware(30 * time.Second))
-router.Use(http.ErrorHandler())
-
-// CORS 配置
-router.Use(http.CorsMiddleware(http.CorsConfig{
-    AllowOrigins: []string{"https://example.com"},
-    AllowMethods: []string{"GET", "POST", "PUT", "DELETE"},
-}))
-
-router.GET("/api/users", func(c *gin.Context) {
-    c.JSON(http.StatusOK, gin.H{"users": []string{"user1", "user2"}})
-})
-
-srv, err := http.NewServer(router, cfg)
+// 创建服务（内部自动启动监听）
+srv, err := http.NewServer(cfg)
 if err != nil {
     log.Errorf("start server error: %v", err)
     return
 }
 
+// 添加路由
+srv.GET("/api/users", func(c *gin.Context) {
+    c.JSON(http.StatusOK, gin.H{"users": []string{"user1", "user2"}})
+})
+
 // 优雅关闭
-defer http.ShutdownServer(srv)
+defer srv.Shutdown(context.Background())
 ```
 
-**可用中间件：**
+**自动注册的中间件：**
 
 | 中间件 | 说明 |
 |--------|------|
 | `RequestIDMiddleware()` | 请求 ID 生成（优先读取 X-Request-ID Header） |
 | `AccessLogMiddleware(format)` | 访问日志 |
-| `TimeoutMiddleware(timeout)` | 请求超时控制（自动返回 408） |
-| `ErrorHandler()` | 统一错误处理 |
 | `CorsMiddleware(config)` | CORS 跨域配置 |
+| `ErrorHandler()` | 统一错误处理 |
+| `bodyLimitMiddleware(limit)` | 请求体大小限制 |
+
+**可选添加的中间件：**
+
+| 中间件 | 说明 |
+|--------|------|
+| `TimeoutMiddleware(timeout)` | 请求超时控制（自动返回 408） |
 
 **日志格式说明：**
 
