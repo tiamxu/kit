@@ -20,12 +20,12 @@ type ServerConfig struct {
 	KeepAlive       bool          `yaml:"keep_alive" json:"keep_alive"`
 	ReadTimeout     time.Duration `yaml:"read_timeout" json:"read_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout" json:"write_timeout"`
-	AccessLogFormat string        `yaml:"access_log_format" json:"access_log_format"`
-	StaticPrefix    string        `yaml:"static_prefix" json:"static_prefix"`
-	StaticDir       string        `yaml:"static_dir" json:"static_dir"`
-	MultipartMemory int64         `yaml:"multipart_memory" json:"multipart_memory"` // 文件上传最大内存，默认32MB
-	BodyLimit       int64         `yaml:"body_limit" json:"body_limit"`             // 请求body最大限制
-	CORSConfig      *CORSConfig   `yaml:"cors" json:"cors"`
+	AccessLogFormat string `yaml:"access_log_format" json:"access_log_format"` // 已废弃，仅保留兼容
+	StaticPrefix    string `yaml:"static_prefix" json:"static_prefix"`
+	StaticDir       string `yaml:"static_dir" json:"static_dir"`
+	MultipartMemory int64  `yaml:"multipart_memory" json:"multipart_memory"` // 文件上传最大内存，默认32MB
+	BodyLimit       int64  `yaml:"body_limit" json:"body_limit"`             // 请求body最大限制
+	CORSConfig      *CORSConfig `yaml:"cors" json:"cors"`
 }
 
 type CORSConfig struct {
@@ -37,7 +37,7 @@ type CORSConfig struct {
 	MaxAge           time.Duration `yaml:"max_age" json:"max_age"`
 }
 
-var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}`
+var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}` // 已废弃，仅保留兼容
 
 const (
 	defaultMultipartMemory = 32 << 20 // 32MB
@@ -47,10 +47,6 @@ const (
 func NewGin(cfg ServerConfig) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-
-	if len(cfg.AccessLogFormat) == 0 {
-		cfg.AccessLogFormat = DefaultAccessLogFormat
-	}
 
 	// 设置默认值
 	if cfg.MultipartMemory == 0 {
@@ -63,7 +59,7 @@ func NewGin(cfg ServerConfig) *gin.Engine {
 	router.Use(
 		RequestIDMiddleware(),
 		gin.Recovery(),
-		AccessLogMiddleware(cfg.AccessLogFormat),
+		AccessLogMiddleware(),
 		corsMiddleware(cfg.CORSConfig),
 		ErrorHandler(),
 	)
@@ -112,7 +108,7 @@ func RequestIDMiddleware() gin.HandlerFunc {
 	}
 }
 
-func AccessLogMiddleware(format string) gin.HandlerFunc {
+func AccessLogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -164,20 +160,7 @@ func AccessLogMiddleware(format string) gin.HandlerFunc {
 			fields["error_count"] = len(c.Errors)
 		}
 
-		logMsg := format
-		if logMsg == "" {
-			logMsg = DefaultAccessLogFormat
-		}
-		for k, v := range fields {
-			placeholder := "${" + k + "}"
-			logMsg = strings.ReplaceAll(logMsg, placeholder, fmt.Sprintf("%v", v))
-		}
-
-		if log.GetGlobalFormat() == "json" {
-			log.WithFields(fields).Info("access")
-		} else {
-			log.Infoln(logMsg)
-		}
+		log.WithFields(fields).Info("access")
 	}
 }
 
@@ -383,23 +366,17 @@ func ErrorHandler() gin.HandlerFunc {
 			apiError = NewHTTPError(c, "unknown_error", "unknown error", http.StatusInternalServerError)
 		}
 
-		if log.GetGlobalFormat() == "json" {
-			log.WithFields(log.Fields{
-				"error_type":  apiError.Type,
-				"status":      apiError.Code,
-				"path":        apiError.Context["path"],
-				"method":      apiError.Context["method"],
-				"client_ip":   apiError.Context["client_ip"],
-				"user_agent":  apiError.Context["user_agent"],
-				"request_id":  apiError.RequestID,
-				"error_count": len(errMsgs),
-				"errors":      strings.Join(errMsgs, "; "),
-			}).Error(strings.Join(errMsgs, "; "))
-		} else {
-			log.Errorf("[http] errors: %s | path: %s | method: %s | status: %d | client_ip: %s",
-				strings.Join(errMsgs, "; "), apiError.Context["path"], apiError.Context["method"],
-				apiError.Code, apiError.Context["client_ip"])
-		}
+		log.WithFields(log.Fields{
+			"error_type":  apiError.Type,
+			"status":      apiError.Code,
+			"path":        apiError.Context["path"],
+			"method":      apiError.Context["method"],
+			"client_ip":   apiError.Context["client_ip"],
+			"user_agent":  apiError.Context["user_agent"],
+			"request_id":  apiError.RequestID,
+			"error_count": len(errMsgs),
+			"errors":      strings.Join(errMsgs, "; "),
+		}).Error(strings.Join(errMsgs, "; "))
 
 		c.JSON(apiError.Code, gin.H{
 			"error": apiError,

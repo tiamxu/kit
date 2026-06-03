@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
@@ -34,10 +35,11 @@ type Config struct {
 type Fields = map[string]any
 
 var (
-	Sugar       *zap.SugaredLogger
-	Logger      *zap.Logger
-	_fields     Fields
-	globalFormat string // 日志格式：json 或 console
+	Sugar        *zap.SugaredLogger
+	Logger       *zap.Logger
+	_fields      Fields
+	_logger      atomic.Value // 存储 Logger 接口，用于并发安全
+	_initOnce    sync.Once
 )
 
 func InitLogger(cfg *Config) error {
@@ -48,7 +50,6 @@ func InitLogger(cfg *Config) error {
 
 	outputType := strings.ToLower(cfg.Type)
 	format := strings.ToLower(cfg.Format)
-	globalFormat = format
 
 	var cores []zapcore.Core
 
@@ -101,10 +102,17 @@ func InitLogger(cfg *Config) error {
 	}
 
 	core := zapcore.NewTee(cores...)
-	Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	Sugar = Logger.Sugar()
+	newLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+	newSugar := newLogger.Sugar()
 
-	return nil
+	var initErr error
+	_initOnce.Do(func() {
+		Logger = newLogger
+		Sugar = newSugar
+		_logger.Store(Logger)
+	})
+
+	return initErr
 }
 
 func buildFileCore(cfg *Config, encoder zapcore.Encoder, enabler zapcore.LevelEnabler) (zapcore.Core, error) {
@@ -184,11 +192,10 @@ func ensureLogger() {
 	})
 }
 
-func GetGlobalFormat() string {
-	return globalFormat
-}
-
 func GetLogger() *zap.SugaredLogger {
+	if l := _logger.Load(); l != nil {
+		return l.(*zap.Logger).Sugar()
+	}
 	ensureLogger()
 	return Sugar
 }
