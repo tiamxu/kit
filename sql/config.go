@@ -2,12 +2,13 @@ package sql
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	// 注册常用驱动
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
-	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 type Config struct {
@@ -75,16 +76,22 @@ func (cfg *Config) mysqlSource() string {
 }
 
 func (cfg *Config) postgresSource() string {
-	pwd := cfg.Password
-	if pwd != "" {
-		pwd = ":" + pwd
-	}
 	port := cfg.Port
 	if port == 0 {
 		port = 5432
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		cfg.Username, pwd, cfg.Host, port, cfg.Database)
+	u := &url.URL{
+		Scheme:   "postgres",
+		Host:     fmt.Sprintf("%s:%d", cfg.Host, port),
+		Path:     "/" + cfg.Database,
+		RawQuery: url.Values{"sslmode": []string{"disable"}}.Encode(),
+	}
+	if cfg.Password != "" {
+		u.User = url.UserPassword(cfg.Username, cfg.Password)
+	} else if cfg.Username != "" {
+		u.User = url.User(cfg.Username)
+	}
+	return u.String()
 }
 
 func (cfg *Config) clickHouseSource() string {

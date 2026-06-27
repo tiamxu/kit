@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,14 +36,23 @@ type Config struct {
 type Fields = map[string]any
 
 var (
-	Sugar        *zap.SugaredLogger
-	Logger       *zap.Logger
-	_fields      Fields
-	_logger      atomic.Value // 存储 Logger 接口，用于并发安全
-	_initOnce    sync.Once
+	Sugar             *zap.SugaredLogger
+	Logger            *zap.Logger
+	_fields           Fields
+	_logger           atomic.Value // 存储 Logger 接口，用于并发安全
+	loggerInitialized atomic.Bool
+)
+
+var (
+	ErrLoggerInitialized = errors.New("logger already initialized")
+	ErrNilConfig         = errors.New("log config cannot be nil")
 )
 
 func InitLogger(cfg *Config) error {
+	if cfg == nil {
+		return ErrNilConfig
+	}
+
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
@@ -105,14 +115,14 @@ func InitLogger(cfg *Config) error {
 	newLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 	newSugar := newLogger.Sugar()
 
-	var initErr error
-	_initOnce.Do(func() {
-		Logger = newLogger
-		Sugar = newSugar
-		_logger.Store(Logger)
-	})
+	if !loggerInitialized.CompareAndSwap(false, true) {
+		return ErrLoggerInitialized
+	}
+	Logger = newLogger
+	Sugar = newSugar
+	_logger.Store(Logger)
 
-	return initErr
+	return nil
 }
 
 func buildFileCore(cfg *Config, encoder zapcore.Encoder, enabler zapcore.LevelEnabler) (zapcore.Core, error) {
@@ -170,25 +180,32 @@ func parseLevel(level string) (zapcore.Level, error) {
 var _once sync.Once
 
 func ensureLogger() {
+	if _logger.Load() != nil {
+		return
+	}
 	_once.Do(func() {
+		if _logger.Load() != nil {
+			return
+		}
 		encoderConfig := zapcore.EncoderConfig{
-			TimeKey:      "time",
-			LevelKey:     "level",
-			NameKey:      "logger",
-			CallerKey:    "caller",
-			FunctionKey:  zapcore.OmitKey,
-			MessageKey:   "msg",
-			StacktraceKey: "stacktrace",
-			LineEnding:   zapcore.DefaultLineEnding,
-			EncodeLevel:  zapcore.CapitalColorLevelEncoder,
-			EncodeTime:   zapcore.ISO8601TimeEncoder,
+			TimeKey:        "time",
+			LevelKey:       "level",
+			NameKey:        "logger",
+			CallerKey:      "caller",
+			FunctionKey:    zapcore.OmitKey,
+			MessageKey:     "msg",
+			StacktraceKey:  "stacktrace",
+			LineEnding:     zapcore.DefaultLineEnding,
+			EncodeLevel:    zapcore.CapitalColorLevelEncoder,
+			EncodeTime:     zapcore.ISO8601TimeEncoder,
 			EncodeDuration: zapcore.SecondsDurationEncoder,
-			EncodeCaller: zapcore.ShortCallerEncoder,
+			EncodeCaller:   zapcore.ShortCallerEncoder,
 		}
 		encoder := zapcore.NewConsoleEncoder(encoderConfig)
 		core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zap.InfoLevel)
 		Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 		Sugar = Logger.Sugar()
+		_logger.Store(Logger)
 	})
 }
 
@@ -200,6 +217,7 @@ func GetLogger() *zap.SugaredLogger {
 	return Sugar
 }
 
+// SetGlobalFields 设置全局日志字段，建议仅在启动阶段调用。
 func SetGlobalFields(fields Fields) {
 	_fields = fields
 }
@@ -251,18 +269,18 @@ func WithContext(ctx context.Context) *SugaredEntry {
 	return &SugaredEntry{sugar: Sugar.With(args...)}
 }
 
-func (e *SugaredEntry) Info(msg string)                           { e.sugar.Infow(msg) }
-func (e *SugaredEntry) Warn(msg string)                           { e.sugar.Warnw(msg) }
-func (e *SugaredEntry) Error(msg string)                          { e.sugar.Errorw(msg) }
-func (e *SugaredEntry) Debug(msg string)                          { e.sugar.Debugw(msg) }
-func (e *SugaredEntry) Fatal(msg string)                          { e.sugar.Fatalw(msg) }
-func (e *SugaredEntry) Panic(msg string)                          { e.sugar.Panicw(msg) }
-func (e *SugaredEntry) Infof(format string, args ...any)         { e.sugar.Infof(format, args...) }
-func (e *SugaredEntry) Warnf(format string, args ...any)          { e.sugar.Warnf(format, args...) }
-func (e *SugaredEntry) Errorf(format string, args ...any)        { e.sugar.Errorf(format, args...) }
-func (e *SugaredEntry) Debugf(format string, args ...any)         { e.sugar.Debugf(format, args...) }
-func (e *SugaredEntry) Fatalf(format string, args ...any)         { e.sugar.Fatalf(format, args...) }
-func (e *SugaredEntry) Panicf(format string, args ...any)         { e.sugar.Panicf(format, args...) }
+func (e *SugaredEntry) Info(msg string)                   { e.sugar.Infow(msg) }
+func (e *SugaredEntry) Warn(msg string)                   { e.sugar.Warnw(msg) }
+func (e *SugaredEntry) Error(msg string)                  { e.sugar.Errorw(msg) }
+func (e *SugaredEntry) Debug(msg string)                  { e.sugar.Debugw(msg) }
+func (e *SugaredEntry) Fatal(msg string)                  { e.sugar.Fatalw(msg) }
+func (e *SugaredEntry) Panic(msg string)                  { e.sugar.Panicw(msg) }
+func (e *SugaredEntry) Infof(format string, args ...any)  { e.sugar.Infof(format, args...) }
+func (e *SugaredEntry) Warnf(format string, args ...any)  { e.sugar.Warnf(format, args...) }
+func (e *SugaredEntry) Errorf(format string, args ...any) { e.sugar.Errorf(format, args...) }
+func (e *SugaredEntry) Debugf(format string, args ...any) { e.sugar.Debugf(format, args...) }
+func (e *SugaredEntry) Fatalf(format string, args ...any) { e.sugar.Fatalf(format, args...) }
+func (e *SugaredEntry) Panicf(format string, args ...any) { e.sugar.Panicf(format, args...) }
 
 func Tracef(format string, args ...any) {
 	ensureLogger()

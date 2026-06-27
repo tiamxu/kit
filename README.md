@@ -57,10 +57,13 @@ cfg := &redis.Config{
     WriteTimeout: 10,
 }
 
-client, err := redis.NewClient(cfg)
+client, err := redis.NewClientCtx(ctx, cfg) // 推荐：由调用方控制初始化生命周期
 if err != nil {
     panic(err)
 }
+
+// NewClientCtx 会校验 nil 参数；NewClient(cfg) 会使用默认背景 Context，适合简单场景。
+// 分布式锁 Unlock/Refresh 会校验 token，不匹配或锁不存在会返回错误。
 
 // 基础操作
 client.Set(ctx, "key", "value", 10*time.Minute)
@@ -122,6 +125,8 @@ db, err := sql.Connect(cfg)
 if err != nil {
     panic(err)
 }
+
+// Connect 会校验 nil 配置；PostgreSQL DSN 会对用户名、密码等信息做 URL 安全拼接。
 
 // 完全兼容 sqlx - 直接使用 sqlx 的所有方法
 var users []User
@@ -214,8 +219,10 @@ if err != nil {
 }
 defer producer.Close()
 
-// 发送消息
-err = producer.SendMessage("test-topic", []byte("key"), []byte("value"))
+// Producer 默认同步发送，便于保证错误返回和重试语义可靠。
+
+// 发送消息（推荐传入调用方 ctx）
+err = producer.SendMessageCtx(ctx, "test-topic", []byte("key"), []byte("value"))
 ```
 
 ### 5. 日志 (log)
@@ -254,8 +261,14 @@ cfg := &log.Config{
     FileName:   "app.log",
 }
 
-log.InitLogger(cfg)
+if err := log.InitLogger(cfg); err != nil {
+    panic(err)
+}
 defer log.Sync()
+
+// InitLogger 只允许成功初始化一次，重复初始化会返回 ErrLoggerInitialized。
+// nil 配置会返回 ErrNilConfig。
+// 已初始化后，Infof/WithFields 不会再覆盖当前 logger。
 
 // 基础日志
 log.Infof("Hello, %s!", "world")
@@ -322,36 +335,38 @@ defer srv.Shutdown(context.Background())
 
 | 中间件 | 说明 |
 |--------|------|
-| `TimeoutMiddleware(timeout)` | 请求超时控制（自动返回 408） |
+| `TimeoutMiddleware(timeout)` | 为请求注入超时 Context；处理函数尊重 Context 超时且未写响应时返回 408 |
 
-**日志格式说明：**
+**访问日志说明：**
 
-默认日志格式（使用 `|` 分隔）：
-```
-${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}
-```
+HTTP 访问日志使用结构化字段输出，最终输出格式由 `log.InitLogger` 中的 `Format` 控制：
 
-| 占位符 | 说明 | 示例 |
+| `log.Config.Format` | 说明 | 推荐场景 |
+|---|---|---|
+| `json` | JSON 结构化日志 | 生产环境、日志平台采集 |
+| `console` | 控制台可读格式 | 本地开发 |
+
+`http.ServerConfig.AccessLogFormat` 和 `DefaultAccessLogFormat` 已废弃，仅保留兼容，不再参与访问日志格式化。
+
+访问日志字段：
+
+| 字段 | 说明 | 示例 |
 |--------|------|------|
-| `${client_ip}` | 客户端 IP | `192.168.1.1` |
-| `${time}` | 请求时间 | `2026-06-01 15:04:05` |
-| `${method}` | HTTP 方法 | `GET` |
-| `${path}` | 请求路径 | `/api/users` |
-| `${status}` | 响应状态码 | `200` |
-| `${bytes_out}` | 响应大小 | `1234` |
-| `${user_agent}` | 用户代理 | `Mozilla/5.0` |
-| `${request_time}` | 请求耗时 | `0.023s` |
-| `${request_id}` | 请求 ID | `abc-123-def` |
-| `${error}` | 错误信息（无错误时为空） | |
-| `${query}` | 查询参数（可选） | `page=1` |
-| `${referer}` | 来源页面（可选） | `https://google.com` |
-| `${real_ip}` | 真实 IP（可选，通过 X-Real-IP header） | `10.0.0.1` |
-| `${protocol}` | 协议版本（可选） | `HTTP/1.1` |
-
-**日志输出示例：**
-```
-192.168.1.1 | 2026-06-01 15:04:05 | "GET /api/users" | 200 | 1234 | Mozilla/5.0 | 0.023s | abc-123-def |
-```
+| `client_ip` | 客户端 IP | `192.168.1.1` |
+| `time` | 请求时间 | `2026-06-01 15:04:05` |
+| `method` | HTTP 方法 | `GET` |
+| `path` | 请求路径 | `/api/users` |
+| `status` | 响应状态码 | `200` |
+| `bytes_in` | 请求大小 | `1234` |
+| `bytes_out` | 响应大小 | `1234` |
+| `user_agent` | 用户代理 | `Mozilla/5.0` |
+| `request_time` | 请求耗时 | `0.023s` |
+| `request_id` | 请求 ID | `abc-123-def` |
+| `error` | 错误信息 | `bind error` |
+| `query` | 查询参数（可选） | `page=1` |
+| `referer` | 来源页面（可选） | `https://google.com` |
+| `real_ip` | 真实 IP（可选，通过 X-Real-IP header） | `10.0.0.1` |
+| `protocol` | 协议版本（可选） | `HTTP/1.1` |
 
 ---
 

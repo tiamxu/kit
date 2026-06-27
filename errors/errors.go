@@ -81,9 +81,17 @@ func IsTimeout(err error) bool {
 
 // IsConnect 统一判断"连接"错误
 func IsConnect(err error) bool {
-	return errors.Is(err, ErrConnect) ||
+	if errors.Is(err, ErrConnect) ||
 		errors.Is(err, SqlErrConnect) ||
-		errors.Is(err, RedisErrConnect)
+		errors.Is(err, RedisErrConnect) {
+		return true
+	}
+	switch GetCode(err) {
+	case "SQL_CONNECT", "SQL_PING", "REDIS_CONNECT":
+		return true
+	default:
+		return false
+	}
 }
 
 // Wrap 错误包装（带错误码），不打印日志

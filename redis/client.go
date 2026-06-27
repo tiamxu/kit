@@ -54,6 +54,16 @@ type Client struct {
 }
 
 func NewClient(cfg *Config) (*Client, error) {
+	return NewClientCtx(context.Background(), cfg)
+}
+
+func NewClientCtx(ctx context.Context, cfg *Config) (*Client, error) {
+	if cfg == nil {
+		return nil, kiterrors.Wrap("REDIS_PARAM", "config cannot be nil", kiterrors.ErrInvalidParam)
+	}
+	if ctx == nil {
+		return nil, kiterrors.Wrap("REDIS_PARAM", "context cannot be nil", kiterrors.ErrInvalidParam)
+	}
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = defaultPoolSize
 	}
@@ -84,11 +94,10 @@ func NewClient(cfg *Config) (*Client, error) {
 
 	client := redis.NewClient(options)
 
-	ctx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(cfg.DialTimeout)*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DialTimeout)*time.Second)
 	defer cancel()
 
-	if err := client.Ping(ctx).Err(); err != nil {
+	if err := client.Ping(pingCtx).Err(); err != nil {
 		return nil, kiterrors.Wrap("REDIS_CONNECT", "failed to connect to Redis", err)
 	}
 
@@ -117,13 +126,25 @@ type RedisLock struct {
 }
 
 func (l *RedisLock) Unlock(ctx context.Context) error {
-	_, err := l.client.Eval(ctx, lockScript, []string{l.key}, l.token).Result()
-	return err
+	result, err := l.client.Eval(ctx, lockScript, []string{l.key}, l.token).Result()
+	if err != nil {
+		return err
+	}
+	if result != int64(1) {
+		return kiterrors.Wrap("REDIS_UNLOCK", "lock token mismatch or lock not found", kiterrors.CacheErrLockFail)
+	}
+	return nil
 }
 
 func (l *RedisLock) Refresh(ctx context.Context, ttl time.Duration) error {
-	_, err := l.client.Eval(ctx, unlockRefreshScript, []string{l.key}, l.token, ttl.Milliseconds()).Result()
-	return err
+	result, err := l.client.Eval(ctx, unlockRefreshScript, []string{l.key}, l.token, ttl.Milliseconds()).Result()
+	if err != nil {
+		return err
+	}
+	if result != int64(1) {
+		return kiterrors.Wrap("REDIS_LOCK_REFRESH", "lock token mismatch or lock not found", kiterrors.CacheErrLockFail)
+	}
+	return nil
 }
 
 type lockConfig struct {

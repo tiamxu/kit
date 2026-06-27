@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,12 +21,12 @@ type ServerConfig struct {
 	KeepAlive       bool          `yaml:"keep_alive" json:"keep_alive"`
 	ReadTimeout     time.Duration `yaml:"read_timeout" json:"read_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout" json:"write_timeout"`
-	AccessLogFormat string `yaml:"access_log_format" json:"access_log_format"` // 已废弃，仅保留兼容
-	StaticPrefix    string `yaml:"static_prefix" json:"static_prefix"`
-	StaticDir       string `yaml:"static_dir" json:"static_dir"`
-	MultipartMemory int64  `yaml:"multipart_memory" json:"multipart_memory"` // 文件上传最大内存，默认32MB
-	BodyLimit       int64  `yaml:"body_limit" json:"body_limit"`             // 请求body最大限制
-	CORSConfig      *CORSConfig `yaml:"cors" json:"cors"`
+	AccessLogFormat string        `yaml:"access_log_format" json:"access_log_format"` // 已废弃，仅保留兼容；访问日志使用结构化字段输出，最终格式由 log.Config.Format 控制
+	StaticPrefix    string        `yaml:"static_prefix" json:"static_prefix"`
+	StaticDir       string        `yaml:"static_dir" json:"static_dir"`
+	MultipartMemory int64         `yaml:"multipart_memory" json:"multipart_memory"` // 文件上传最大内存，默认32MB
+	BodyLimit       int64         `yaml:"body_limit" json:"body_limit"`             // 请求body最大限制
+	CORSConfig      *CORSConfig   `yaml:"cors" json:"cors"`
 }
 
 type CORSConfig struct {
@@ -37,11 +38,12 @@ type CORSConfig struct {
 	MaxAge           time.Duration `yaml:"max_age" json:"max_age"`
 }
 
-var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}` // 已废弃，仅保留兼容
+// DefaultAccessLogFormat 已废弃，仅保留兼容；访问日志不再使用字符串模板格式化。
+var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}`
 
 const (
 	defaultMultipartMemory = 32 << 20 // 32MB
-	defaultBodyLimit       = 8 << 20 // 8MB
+	defaultBodyLimit       = 8 << 20  // 8MB
 )
 
 func NewGin(cfg ServerConfig) *gin.Engine {
@@ -195,7 +197,7 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 		if origin == "*" {
 			allowedOrigins["*"] = true
 		} else if strings.HasPrefix(origin, "*.") {
-			wildcardSuffixes = append(wildcardSuffixes, strings.TrimPrefix(origin, "*"))
+			wildcardSuffixes = append(wildcardSuffixes, strings.TrimPrefix(origin, "*."))
 		} else {
 			allowedOrigins[origin] = true
 		}
@@ -221,8 +223,7 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 		} else {
 			// 严格匹配 *.domain.com 格式（通配符不能跨多个点）
 			for _, suffix := range wildcardSuffixes {
-				fullSuffix := "." + suffix
-				if strings.HasSuffix(origin, fullSuffix) && len(origin) > len(fullSuffix) && origin[len(origin)-len(fullSuffix)-1] == '.' {
+				if matchWildcardOrigin(origin, suffix) {
 					allowed = true
 					break
 				}
@@ -249,35 +250,29 @@ func corsMiddleware(config *CORSConfig) gin.HandlerFunc {
 	}
 }
 
+func matchWildcardOrigin(origin, suffix string) bool {
+	host := origin
+	if u, err := url.Parse(origin); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+
+	fullSuffix := "." + suffix
+	if !strings.HasSuffix(host, fullSuffix) {
+		return false
+	}
+	prefix := strings.TrimSuffix(host, fullSuffix)
+	return prefix != "" && !strings.Contains(prefix, ".")
+}
+
 func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
 
-		done := make(chan struct{})
-		panicChan := make(chan any, 1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					select {
-					case panicChan <- r:
-					default:
-					}
-				}
-				close(done)
-			}()
-			c.Next()
-		}()
+		c.Next()
 
-		select {
-		case <-done:
-			select {
-			case p := <-panicChan:
-				panic(p)
-			default:
-			}
-		case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded && !c.Writer.Written() {
 			c.AbortWithStatusJSON(http.StatusRequestTimeout, gin.H{
 				"error": gin.H{
 					"type":    "request_timeout",
@@ -377,6 +372,10 @@ func ErrorHandler() gin.HandlerFunc {
 			"error_count": len(errMsgs),
 			"errors":      strings.Join(errMsgs, "; "),
 		}).Error(strings.Join(errMsgs, "; "))
+
+		if c.Writer.Written() {
+			return
+		}
 
 		c.JSON(apiError.Code, gin.H{
 			"error": apiError,

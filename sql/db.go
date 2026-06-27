@@ -18,6 +18,9 @@ type DB struct {
 }
 
 func Connect(dbConfig *Config) (*DB, error) {
+	if dbConfig == nil {
+		return nil, kiterrors.Wrap("SQL_PARAM", "config cannot be nil", kiterrors.ErrInvalidParam)
+	}
 	if err := dbConfig.Validate(); err != nil {
 		return nil, err
 	}

@@ -36,6 +36,9 @@ type Config struct {
 //	*KafkaProducer: Kafka生产者实例
 //	error: 错误信息
 func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
+	if cfg == nil {
+		return nil, kiterrors.Wrap("KAFKA_PARAM", "config cannot be nil", kiterrors.ErrInvalidParam)
+	}
 	if len(cfg.Brokers) == 0 {
 		return nil, kiterrors.Wrap("KAFKA_PARAM", "brokers cannot be empty", kiterrors.KafkaErrNoBrokers)
 	}
@@ -76,7 +79,7 @@ func buildWriterConfig(cfg *Config) kafka.WriterConfig {
 		Balancer:     &kafka.LeastBytes{},
 		BatchTimeout: cfg.BatchTimeout,
 		BatchSize:    cfg.BatchSize,
-		Async:        true,
+		Async:        false,
 	}
 }
 
