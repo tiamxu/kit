@@ -1,0 +1,35 @@
+package config
+
+import (
+	"os"
+
+	kithttp "github.com/tiamxu/kit/http"
+	"github.com/tiamxu/kit/log"
+	{{if .WithDB}}"github.com/tiamxu/kit/sql"
+	{{end}}"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	HttpSrv kithttp.ServerConfig `yaml:"http_srv"`
+	Log     log.Config           `yaml:"log"`
+	{{if .WithDB}}DB      sql.Config           `yaml:"db"`
+	{{end}}
+}
+
+func Load() (*Config, error) {
+	path := os.Getenv("CONFIG_FILE")
+	if path == "" {
+		path = "config/config.yaml"
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}

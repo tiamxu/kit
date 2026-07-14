@@ -61,12 +61,13 @@ func (cfg *Config) Source() (string, error) {
 func (cfg *Config) mysqlSource() string {
 	pwd := cfg.Password
 	if pwd != "" {
-		pwd = ":" + pwd
+		pwd = ":" + url.QueryEscape(pwd)
 	}
 	username := cfg.Username
 	if username == "" {
 		username = "root"
 	}
+	username = url.QueryEscape(username)
 	port := cfg.Port
 	if port == 0 {
 		port = 3306
@@ -95,15 +96,25 @@ func (cfg *Config) postgresSource() string {
 }
 
 func (cfg *Config) clickHouseSource() string {
-	if cfg.ReadTimeout == 0 {
-		cfg.ReadTimeout = 10
+	readTimeout := cfg.ReadTimeout
+	if readTimeout == 0 {
+		readTimeout = 10
 	}
-	if cfg.WriteTimeout == 0 {
-		cfg.WriteTimeout = 10
+	writeTimeout := cfg.WriteTimeout
+	if writeTimeout == 0 {
+		writeTimeout = 10
 	}
-	if cfg.Port == 0 {
-		cfg.Port = 9000
+	port := cfg.Port
+	if port == 0 {
+		port = 9000
 	}
-	return fmt.Sprintf("clickhouse://%s:%d?username=%s&database=%s&read_timeout=%d&write_timeout=%d",
-		cfg.Host, cfg.Port, cfg.Username, cfg.Database, cfg.ReadTimeout, cfg.WriteTimeout)
+	values := url.Values{}
+	values.Set("username", cfg.Username)
+	if cfg.Password != "" {
+		values.Set("password", cfg.Password)
+	}
+	values.Set("database", cfg.Database)
+	values.Set("read_timeout", fmt.Sprintf("%d", readTimeout))
+	values.Set("write_timeout", fmt.Sprintf("%d", writeTimeout))
+	return fmt.Sprintf("clickhouse://%s:%d?%s", cfg.Host, port, values.Encode())
 }

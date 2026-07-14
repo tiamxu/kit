@@ -1,0 +1,11 @@
+module {{.Module}}
+
+go 1.24.1
+
+require (
+	github.com/gin-gonic/gin v1.10.0
+	gopkg.in/yaml.v3 v3.0.1
+)
+{{if .KitReplace}}
+replace github.com/tiamxu/kit => {{.KitReplace}}
+{{end}}

@@ -1,5 +1,14 @@
 # kit - Go 通用工具库
 
+## 行为说明
+
+- Kafka Producer 使用 `Config.Topic` 作为默认主题；调用 `SendMessageCtx` 时传入空 topic 会使用默认主题。
+- Kafka 发送重试等待、Redis 分布式锁重试等待会响应 `context.Context` 取消。
+- HTTP `NewServer` 只创建服务实例；注册路由后需要调用 `Start` 启动监听。
+- MySQL DSN 会转义用户名和密码中的特殊字符。
+- ClickHouse DSN 会使用 URL query 编码，并在配置了密码时包含 `password` 参数。
+- `gogen new api` 默认不写入本地 `replace`，需要本地联调 kit 时显式传入 `--local-kit-replace`；找不到本地 kit 仓库时会报错；生成项目默认只生成 `config/config.yaml`，且不包含数据库配置和初始化代码；需要数据库时显式传入 `--with-db`；健康检查不依赖本地数据库并使用统一响应结构。
+
 简洁实用的 Go 工具库，提供常用功能模块，简化项目开发。
 
 ## 安装
@@ -16,6 +25,8 @@ go get github.com/tiamxu/kit
 | **http** | HTTP 服务器和中间件（基于 Gin） |
 | **kafka** | Kafka 消息队列（基于 kafka-go） |
 | **log** | 日志记录（基于 zap + lumberjack） |
+| **mask** | 脱敏工具（手机号、邮箱、身份证、银行卡、姓名） |
+| **page** | 分页工具（默认值、最大页大小、offset/limit） |
 | **redis** | Redis 客户端封装（含缓存语义：序列化、分布式锁） |
 | **sql** | 数据库封装（基于 sqlx，MySQL/PostgreSQL/ClickHouse） |
 
@@ -305,20 +316,52 @@ cfg := http.ServerConfig{
     BodyLimit:       8 << 20,  // 8MB
 }
 
-// 创建服务（内部自动启动监听）
-srv, err := http.NewServer(cfg)
-if err != nil {
-    log.Errorf("start server error: %v", err)
-    return
-}
+// 创建服务
+srv := http.NewServer(cfg)
 
 // 添加路由
 srv.GET("/api/users", func(c *gin.Context) {
     c.JSON(http.StatusOK, gin.H{"users": []string{"user1", "user2"}})
 })
 
+if err := srv.Start(); err != nil {
+    log.Errorf("start server error: %v", err)
+    return
+}
+
 // 优雅关闭
 defer srv.Shutdown(context.Background())
+```
+
+### 7. 分页工具 (page)
+
+```go
+import "github.com/tiamxu/kit/page"
+
+p := page.Normalize(req.Page, req.PageSize)
+
+limit := p.Limit()
+offset := p.Offset()
+```
+
+默认规则：
+
+| 参数 | 默认值 |
+|---|---|
+| Page | 1 |
+| PageSize | 20 |
+| MaxPageSize | 100 |
+
+### 8. 脱敏工具 (mask)
+
+```go
+import "github.com/tiamxu/kit/mask"
+
+phone := mask.Phone("13812345678")      // 138****5678
+email := mask.Email("test@example.com") // t***@example.com
+idCard := mask.IDCard("110101199001011234")
+bankCard := mask.BankCard("6222021234567890")
+name := mask.Name("张三") // 张*
 ```
 
 **自动注册的中间件：**

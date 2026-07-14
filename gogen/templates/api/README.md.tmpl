@@ -1,0 +1,42 @@
+# {{.ProjectName}}
+
+通用 Go API 项目骨架，默认使用：
+
+- `github.com/tiamxu/kit/log`
+- `github.com/tiamxu/kit/http`{{if .WithDB}}
+- `github.com/tiamxu/kit/sql`{{end}}
+
+## 启动
+
+```bash
+go mod tidy
+go run .
+```
+
+如需指定配置文件：
+
+```bash
+CONFIG_FILE=config/config-prod.yaml go run .
+```
+{{if .WithDB}}
+当前项目生成时已启用数据库能力，`config/config.yaml` 包含 `db` 配置，启动时会初始化数据库连接。
+{{else}}
+默认不生成数据库配置和初始化代码，应用可先启动 HTTP 服务和健康检查。需要数据库时，请重新生成项目并传入 `--with-db`，或按项目规范手动补充 `repo.Init` 和 `db` 配置。
+{{end}}
+
+## 目录
+
+```text
+api/       接口处理
+config/    配置加载
+{{if .WithDB}}repo/      数据访问
+{{end}}routes/    路由定义
+pkg/e/     错误码
+doc/       项目文档
+```
+
+## 文档
+
+- 开发规范：`doc/项目开发规范.md`
+- 设计文档：`doc/设计文档.md`
+- 接口文档：`doc/接口文档.md`

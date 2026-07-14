@@ -64,37 +64,38 @@ func NewClientCtx(ctx context.Context, cfg *Config) (*Client, error) {
 	if ctx == nil {
 		return nil, kiterrors.Wrap("REDIS_PARAM", "context cannot be nil", kiterrors.ErrInvalidParam)
 	}
-	if cfg.PoolSize <= 0 {
-		cfg.PoolSize = defaultPoolSize
+	cfgCopy := *cfg
+	if cfgCopy.PoolSize <= 0 {
+		cfgCopy.PoolSize = defaultPoolSize
 	}
-	if cfg.MaxIdle <= 0 {
-		cfg.MaxIdle = defaultMaxIdle
+	if cfgCopy.MaxIdle <= 0 {
+		cfgCopy.MaxIdle = defaultMaxIdle
 	}
-	if cfg.DialTimeout <= 0 {
-		cfg.DialTimeout = defaultDialTimeout
+	if cfgCopy.DialTimeout <= 0 {
+		cfgCopy.DialTimeout = defaultDialTimeout
 	}
-	if cfg.ReadTimeout <= 0 {
-		cfg.ReadTimeout = defaultReadTimeout
+	if cfgCopy.ReadTimeout <= 0 {
+		cfgCopy.ReadTimeout = defaultReadTimeout
 	}
-	if cfg.WriteTimeout <= 0 {
-		cfg.WriteTimeout = defaultWriteTimeout
+	if cfgCopy.WriteTimeout <= 0 {
+		cfgCopy.WriteTimeout = defaultWriteTimeout
 	}
 
 	options := &redis.Options{
-		Addr:         cfg.Address,
-		Password:     cfg.Password,
-		DB:           cfg.DB,
-		PoolSize:     cfg.PoolSize,
-		MinIdleConns: cfg.MinIdle,
-		MaxIdleConns: cfg.MaxIdle,
-		DialTimeout:  time.Duration(cfg.DialTimeout) * time.Second,
-		ReadTimeout:  time.Duration(cfg.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.WriteTimeout) * time.Second,
+		Addr:         cfgCopy.Address,
+		Password:     cfgCopy.Password,
+		DB:           cfgCopy.DB,
+		PoolSize:     cfgCopy.PoolSize,
+		MinIdleConns: cfgCopy.MinIdle,
+		MaxIdleConns: cfgCopy.MaxIdle,
+		DialTimeout:  time.Duration(cfgCopy.DialTimeout) * time.Second,
+		ReadTimeout:  time.Duration(cfgCopy.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfgCopy.WriteTimeout) * time.Second,
 	}
 
 	client := redis.NewClient(options)
 
-	pingCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.DialTimeout)*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, time.Duration(cfgCopy.DialTimeout)*time.Second)
 	defer cancel()
 
 	if err := client.Ping(pingCtx).Err(); err != nil {
@@ -185,7 +186,11 @@ func (c *Client) TryLock(ctx context.Context, key string, ttl time.Duration, opt
 			return &RedisLock{client: c.Client, key: lockKey, token: token}, nil
 		}
 		if i < cfg.retryCount-1 {
-			time.Sleep(cfg.retryDelay)
+			select {
+			case <-ctx.Done():
+				return nil, kiterrors.Wrap("REDIS_LOCK", "context cancelled", ctx.Err())
+			case <-time.After(cfg.retryDelay):
+			}
 		}
 	}
 	return nil, kiterrors.Wrap("REDIS_LOCK", "lock failed after retries", kiterrors.CacheErrLockFail)

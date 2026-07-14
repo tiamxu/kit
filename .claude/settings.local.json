@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(go test *)",
+      "Bash(go env *)",
+      "Bash(gofmt *)",
+      "Bash(GOOS=windows GOARCH=amd64 go run *)",
+      "Bash(python *)",
+      "Bash(py *)",
+      "Bash(powershell.exe *)",
+      "Bash(mktemp -d)"
     ]
   }
 }

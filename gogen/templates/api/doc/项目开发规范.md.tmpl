@@ -1,0 +1,92 @@
+# 项目开发规范
+
+## 一、目标
+
+本规范用于约束项目目录、分层、命名、路由、响应、错误处理、文档同步和修改流程。
+
+核心原则：
+- 分层清晰。
+- 命名一致。
+- 路由规范。
+- 响应统一。
+- 最小变更。
+
+## 二、默认技术栈
+
+| 能力 | 默认库 |
+|---|---|
+| 日志 | `github.com/tiamxu/kit/log` |
+| HTTP 服务 | `github.com/tiamxu/kit/http` |
+{{if .WithDB}}| 数据库 | `github.com/tiamxu/kit/sql` |
+{{else}}| 数据库 | 如业务需要，优先使用 `github.com/tiamxu/kit/sql` |
+{{end}}
+约定：
+- 启动阶段调用 `log.InitLogger`。
+- 程序退出前调用 `log.Sync`。
+- HTTP 服务使用 `kithttp.NewServer` 创建。
+- 注册路由后调用 `srv.Start()`。
+{{if .WithDB}}- 数据库连接统一由 `repo.Init` 初始化。
+- SQL 只允许写在 `repo/`。
+{{else}}- 默认不生成数据库配置和初始化代码。
+- 如业务需要数据库，数据库连接统一由 `repo.Init` 初始化，SQL 只允许写在 `repo/`。
+{{end}}
+
+## 三、目录规范
+
+```text
+api/            接口层
+routes/         路由定义
+config/         配置加载
+pkg/            公共包
+doc/            项目文档
+{{if .WithDB}}repo/           数据访问层
+{{else}}repo/           数据访问层，按业务需要创建
+{{end}}service/        业务逻辑层，按业务需要创建
+model/          数据库结构体，按业务需要创建
+types/          请求 / 响应结构体，按业务需要创建
+middleware/     中间件，按业务需要创建
+sql/            数据库脚本，按业务需要创建
+```
+
+## 四、分层规范
+
+依赖方向：
+
+```text
+api -> service -> repo -> model
+```
+
+- api：解析请求、参数校验、调用 service、返回统一响应。
+- service：处理业务逻辑、业务规则、调用 repo。
+- repo：处理 SQL 和数据访问。
+- model：表示数据库结构。
+- types：表示请求和响应结构。
+
+禁止跨层反向依赖，禁止在 api 写 SQL，禁止在 repo 写业务逻辑。
+
+## 五、路由规范
+
+- 路由统一放在 `routes/` 目录。
+- 对外 API 推荐使用版本前缀，例如 `/api/v1`。
+- 资源使用复数名词，例如 `/api/v1/users`。
+- 单个资源使用 `:id`，例如 `/api/v1/users/:id`。
+- CRUD 使用标准 HTTP Method。
+- 禁止使用 `/getXxx`、`/createXxx` 这类动词式路径。
+
+## 六、响应与错误规范
+
+- 只有 api 层允许处理 HTTP 响应。
+- 所有接口使用统一响应结构。
+- 错误码统一放在 `pkg/e`。
+- 禁止直接返回原始 error。
+- 禁止暴露 SQL 错误、数据库错误和堆栈信息。
+
+## 七、文档同步
+
+以下变更必须同步 `doc/`：
+- 新增或修改接口。
+- 修改请求或响应字段。
+- 修改错误码。
+- 修改核心业务流程。
+- 修改数据库结构。
+- 修改配置项。

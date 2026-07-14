@@ -1,0 +1,16 @@
+http_srv:
+  address: ":8080"
+
+log:
+  level: info
+  type: stdout
+  format: console
+{{if .WithDB}}
+db:
+  driver: mysql
+  database: app
+  username: root
+  password: ""
+  host: 127.0.0.1
+  port: 3306
+{{end}}

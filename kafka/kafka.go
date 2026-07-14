@@ -46,15 +46,16 @@ func NewKafkaProducer(cfg *Config) (*KafkaProducer, error) {
 		return nil, kiterrors.Wrap("KAFKA_PARAM", "topic cannot be empty", kiterrors.KafkaErrTopic)
 	}
 
-	applyDefaults(cfg)
+	cfgCopy := *cfg
+	applyDefaults(&cfgCopy)
 
-	writerConfig := buildWriterConfig(cfg)
+	writerConfig := buildWriterConfig(&cfgCopy)
 	writer := kafka.NewWriter(writerConfig)
 	writer.AllowAutoTopicCreation = true
 
 	return &KafkaProducer{
 		writer: writer,
-		config: cfg,
+		config: &cfgCopy,
 	}, nil
 }
 
@@ -110,7 +111,7 @@ func (p *KafkaProducer) SendMessage(topic string, key, value []byte) error {
 
 func (p *KafkaProducer) SendMessageCtx(ctx context.Context, topic string, key, value []byte) error {
 	msg := kafka.Message{
-		Topic: topic,
+		Topic: p.resolveTopic(topic),
 		Key:   key,
 		Value: value,
 	}
@@ -129,10 +130,21 @@ func (p *KafkaProducer) SendMessageCtx(ctx context.Context, topic string, key, v
 			return kiterrors.Wrap("KAFKA_PRODUCE", "context cancelled", err)
 		}
 		if i < p.config.MaxRetries-1 {
-			time.Sleep(p.config.RetryInterval)
+			select {
+			case <-ctx.Done():
+				return kiterrors.Wrap("KAFKA_PRODUCE", "context cancelled", ctx.Err())
+			case <-time.After(p.config.RetryInterval):
+			}
 		}
 	}
 	return kiterrors.Wrap("KAFKA_PRODUCE", fmt.Sprintf("failed to send message after %d retries", p.config.MaxRetries), lastErr)
+}
+
+func (p *KafkaProducer) resolveTopic(topic string) string {
+	if topic != "" {
+		return topic
+	}
+	return p.config.Topic
 }
 
 // KafkaConsumer 封装了使用segmentio/kafka-go的Kafka消费者

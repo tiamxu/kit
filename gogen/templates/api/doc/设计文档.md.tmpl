@@ -1,0 +1,33 @@
+# 设计文档
+
+## 一、项目说明
+
+{{.ProjectName}} 是基于 `kit/log`、`kit/http`{{if .WithDB}}、`kit/sql`{{end}} 初始化的 Go API 项目。
+
+## 二、架构分层
+
+```text
+api -> service{{if .WithDB}} -> repo -> model{{end}}
+```
+
+## 三、模块设计
+
+- `api/` 提供统一响应封装，响应消息默认来自 `pkg/e`。
+- `routes/` 注册路由，默认健康检查接口使用统一响应结构。
+{{if .WithDB}}- `repo/` 提供数据库初始化入口，启动阶段会初始化数据库连接。
+- `service/`、`model/`、`types/`、`middleware/`、`sql/` 按业务需要创建。
+{{else}}- 默认不生成数据库配置、`repo/` 和数据库初始化代码。
+- `service/`、`repo/`、`model/`、`types/`、`middleware/`、`sql/` 按业务需要创建。
+{{end}}
+待业务模块确定后补充。
+
+## 四、核心流程
+
+待业务流程确定后补充。
+
+## 五、配置说明
+
+配置文件位于 `config/`，默认读取 `config/config.yaml`，可通过 `CONFIG_FILE` 环境变量指定。
+{{if .WithDB}}当前项目包含 `db` 配置，启动阶段会初始化数据库连接。
+{{else}}默认配置不包含 `db` 配置，健康检查接口不依赖本地数据库。
+{{end}}

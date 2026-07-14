@@ -389,8 +389,8 @@ type Server struct {
 	srv *http.Server
 }
 
-// NewServer 创建服务实例，内部创建路由引擎并启动监听
-func NewServer(cfg ServerConfig) (*Server, error) {
+// NewServer 创建服务实例，调用方注册路由后再调用 Start 启动监听。
+func NewServer(cfg ServerConfig) *Server {
 	engine := NewGin(cfg)
 
 	srv := &http.Server{
@@ -400,18 +400,27 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
-	listener, err := net.Listen("tcp", cfg.Address)
+	return &Server{Engine: engine, srv: srv}
+}
+
+func (s *Server) Start() error {
+	if s == nil || s.srv == nil {
+		return kiterrors.Wrap("HTTP_START", "server is nil", kiterrors.ErrInvalidParam)
+	}
+
+	address := s.srv.Addr
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return nil, kiterrors.Wrap("HTTP_START", "failed to listen on "+cfg.Address, err)
+		return kiterrors.Wrap("HTTP_START", "failed to listen on "+address, err)
 	}
 
 	go func() {
-		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := s.srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Errorf("server serve error: %v", err)
 		}
 	}()
 
-	return &Server{Engine: engine, srv: srv}, nil
+	return nil
 }
 
 // Shutdown 优雅关闭服务
