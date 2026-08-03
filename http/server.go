@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -40,6 +42,23 @@ type CORSConfig struct {
 
 // DefaultAccessLogFormat 已废弃，仅保留兼容；访问日志不再使用字符串模板格式化。
 var DefaultAccessLogFormat = `${client_ip} | ${time} | "${method} ${path}" | ${status} | ${bytes_out} | ${user_agent} | ${request_time} | ${request_id} | ${error}`
+
+var accessLogFieldOrder = []string{
+	"status",
+	"method",
+	"path",
+	"query",
+	"client_ip",
+	"host",
+	"request_id",
+	"user_agent",
+	"request_time",
+	"bytes_in",
+	"bytes_out",
+	"referer",
+	"protocol",
+	"real_ip",
+}
 
 const (
 	defaultMultipartMemory = 32 << 20 // 32MB
@@ -133,37 +152,43 @@ func AccessLogMiddleware() gin.HandlerFunc {
 			"status":       c.Writer.Status(),
 			"method":       c.Request.Method,
 			"path":         path,
+			"query":        query,
 			"client_ip":    c.ClientIP(),
 			"host":         c.Request.Host,
 			"request_id":   requestID,
 			"user_agent":   c.Request.UserAgent(),
-			"time":         time.Now().Format("2006-01-02 15:04:05"),
 			"request_time": fmt.Sprintf("%.3fs", float64(latency.Microseconds())/1e6),
 			"bytes_in":     requestSize,
 			"bytes_out":    c.Writer.Size(),
+			"referer":      c.Request.Referer(),
+			"protocol":     c.Request.Proto,
+			"real_ip":      c.GetHeader("X-Real-IP"),
 		}
 
-		if query != "" {
-			fields["query"] = query
-		}
-		if realIP := c.GetHeader("X-Real-IP"); realIP != "" {
-			fields["real_ip"] = realIP
-		}
-		if referer := c.Request.Referer(); referer != "" {
-			fields["referer"] = referer
-		}
-		if proto := c.Request.Proto; proto != "" {
-			fields["protocol"] = proto
-		}
-		fields["error"] = ""
-		fields["error_count"] = 0
-		if len(c.Errors) > 0 {
-			fields["error"] = c.Errors.String()
-			fields["error_count"] = len(c.Errors)
-		}
-
-		log.WithFields(fields).Info("access")
+		log.InfoRecord(fields, formatAccessLogConsole(fields))
 	}
+}
+
+func formatAccessLogConsole(fields log.Fields) string {
+	values := make([]string, 0, len(accessLogFieldOrder))
+	for _, field := range accessLogFieldOrder {
+		values = append(values, formatAccessLogValue(fields[field]))
+	}
+	return strings.Join(values, " ")
+}
+
+func formatAccessLogValue(value any) string {
+	if value == nil {
+		return "-"
+	}
+	text := fmt.Sprint(value)
+	if text == "" {
+		return "-"
+	}
+	if _, ok := value.(string); ok && (strings.ContainsAny(text, " \"") || strings.IndexFunc(text, unicode.IsControl) >= 0) {
+		return strconv.Quote(text)
+	}
+	return text
 }
 
 func corsMiddleware(config *CORSConfig) gin.HandlerFunc {

@@ -38,8 +38,10 @@ type Fields = map[string]any
 var (
 	Sugar             *zap.SugaredLogger
 	Logger            *zap.Logger
+	recordSugar       *zap.SugaredLogger
 	_fields           Fields
 	_logger           atomic.Value // 存储 Logger 接口，用于并发安全
+	logFormat         atomic.Value
 	loggerInitialized atomic.Bool
 )
 
@@ -48,21 +50,74 @@ var (
 	ErrNilConfig         = errors.New("log config cannot be nil")
 )
 
+type loggerBundle struct {
+	logger      *zap.Logger
+	sugar       *zap.SugaredLogger
+	recordSugar *zap.SugaredLogger
+	format      string
+}
+
 func InitLogger(cfg *Config) error {
 	if cfg == nil {
 		return ErrNilConfig
 	}
 
-	level, err := parseLevel(cfg.Level)
+	sinks, err := buildWriteSyncers(cfg)
 	if err != nil {
-		return fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
+		return err
+	}
+	bundle, err := newLoggerBundle(cfg, sinks)
+	if err != nil {
+		return err
 	}
 
-	outputType := strings.ToLower(cfg.Type)
-	format := strings.ToLower(cfg.Format)
+	if !loggerInitialized.CompareAndSwap(false, true) {
+		return ErrLoggerInitialized
+	}
+	Logger = bundle.logger
+	Sugar = bundle.sugar
+	recordSugar = bundle.recordSugar
+	logFormat.Store(bundle.format)
+	_logger.Store(Logger)
 
-	var cores []zapcore.Core
+	return nil
+}
 
+func newLoggerBundle(cfg *Config, sinks []zapcore.WriteSyncer) (*loggerBundle, error) {
+	if cfg == nil {
+		return nil, ErrNilConfig
+	}
+	level, err := parseLevel(cfg.Level)
+	if err != nil {
+		return nil, fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
+	}
+	format := strings.ToLower(strings.TrimSpace(cfg.Format))
+	if format != "json" {
+		format = "console"
+	}
+	if len(sinks) == 0 {
+		sinks = []zapcore.WriteSyncer{zapcore.AddSync(os.Stdout)}
+	}
+	enabler := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl >= level
+	})
+	normalCores := make([]zapcore.Core, 0, len(sinks))
+	recordCores := make([]zapcore.Core, 0, len(sinks))
+	for _, sink := range sinks {
+		normalCores = append(normalCores, zapcore.NewCore(newEncoder(format, true), sink, enabler))
+		recordCores = append(recordCores, zapcore.NewCore(newEncoder(format, false), sink, enabler))
+	}
+	logger := zap.New(zapcore.NewTee(normalCores...), zap.AddCaller(), zap.AddCallerSkip(1))
+	recordLogger := zap.New(zapcore.NewTee(recordCores...), zap.AddCaller(), zap.AddCallerSkip(1))
+	return &loggerBundle{
+		logger:      logger,
+		sugar:       logger.Sugar(),
+		recordSugar: recordLogger.Sugar(),
+		format:      format,
+	}, nil
+}
+
+func newEncoder(format string, includeMessage bool) zapcore.Encoder {
 	encoderConfig := zapcore.EncoderConfig{
 		TimeKey:        "time",
 		LevelKey:       "level",
@@ -77,55 +132,50 @@ func InitLogger(cfg *Config) error {
 		EncodeDuration: zapcore.SecondsDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
-
-	var encoder zapcore.Encoder
-	if format == "json" {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	} else {
-		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	if !includeMessage {
+		encoderConfig.MessageKey = zapcore.OmitKey
 	}
+	if format == "json" {
+		return zapcore.NewJSONEncoder(encoderConfig)
+	}
+	encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	return zapcore.NewConsoleEncoder(encoderConfig)
+}
 
-	enabler := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-		return lvl >= level
-	})
+func (b *loggerBundle) infoRecord(fields Fields, consoleText string) {
+	if b.format == "json" {
+		b.recordSugar.With(fieldsToArgs(fields)...).Info()
+		return
+	}
+	b.sugar.Info(consoleText)
+}
 
+func buildWriteSyncers(cfg *Config) ([]zapcore.WriteSyncer, error) {
+	outputType := strings.ToLower(cfg.Type)
 	parts := strings.Split(outputType, "+")
+	sinks := make([]zapcore.WriteSyncer, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		switch part {
 		case "stdout", "":
-			cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), enabler))
+			sinks = append(sinks, zapcore.AddSync(os.Stdout))
 		case "file":
-			fileCore, err := buildFileCore(cfg, encoder, enabler)
+			fileSink, err := buildFileWriteSyncer(cfg)
 			if err != nil {
-				return fmt.Errorf("setup file output: %w", err)
+				return nil, fmt.Errorf("setup file output: %w", err)
 			}
-			cores = append(cores, fileCore)
+			sinks = append(sinks, fileSink)
 		default:
-			return fmt.Errorf("unknown output type: %s", part)
+			return nil, fmt.Errorf("unknown output type: %s", part)
 		}
 	}
-
-	if len(cores) == 0 {
-		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), enabler))
+	if len(sinks) == 0 {
+		sinks = append(sinks, zapcore.AddSync(os.Stdout))
 	}
-
-	core := zapcore.NewTee(cores...)
-	newLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	newSugar := newLogger.Sugar()
-
-	if !loggerInitialized.CompareAndSwap(false, true) {
-		return ErrLoggerInitialized
-	}
-	Logger = newLogger
-	Sugar = newSugar
-	_logger.Store(Logger)
-
-	return nil
+	return sinks, nil
 }
 
-func buildFileCore(cfg *Config, encoder zapcore.Encoder, enabler zapcore.LevelEnabler) (zapcore.Core, error) {
+func buildFileWriteSyncer(cfg *Config) (zapcore.WriteSyncer, error) {
 	if cfg.FilePath == "" {
 		cfg.FilePath = "logs"
 	}
@@ -155,7 +205,7 @@ func buildFileCore(cfg *Config, encoder zapcore.Encoder, enabler zapcore.LevelEn
 		Compress:   cfg.Compress,
 	}
 
-	return zapcore.NewCore(encoder, zapcore.AddSync(writer), enabler), nil
+	return zapcore.AddSync(writer), nil
 }
 
 func parseLevel(level string) (zapcore.Level, error) {
@@ -187,24 +237,14 @@ func ensureLogger() {
 		if _logger.Load() != nil {
 			return
 		}
-		encoderConfig := zapcore.EncoderConfig{
-			TimeKey:        "time",
-			LevelKey:       "level",
-			NameKey:        "logger",
-			CallerKey:      "caller",
-			FunctionKey:    zapcore.OmitKey,
-			MessageKey:     "msg",
-			StacktraceKey:  "stacktrace",
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.CapitalColorLevelEncoder,
-			EncodeTime:     zapcore.ISO8601TimeEncoder,
-			EncodeDuration: zapcore.SecondsDurationEncoder,
-			EncodeCaller:   zapcore.ShortCallerEncoder,
+		bundle, err := newLoggerBundle(&Config{Level: "info", Format: "console"}, []zapcore.WriteSyncer{zapcore.AddSync(os.Stdout)})
+		if err != nil {
+			return
 		}
-		encoder := zapcore.NewConsoleEncoder(encoderConfig)
-		core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zap.InfoLevel)
-		Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-		Sugar = Logger.Sugar()
+		Logger = bundle.logger
+		Sugar = bundle.sugar
+		recordSugar = bundle.recordSugar
+		logFormat.Store(bundle.format)
 		_logger.Store(Logger)
 	})
 }
@@ -255,6 +295,16 @@ func WithFields(fields Fields) *SugaredEntry {
 	ensureLogger()
 	args := getMergedFields(fields)
 	return &SugaredEntry{sugar: Sugar.With(args...)}
+}
+
+func InfoRecord(fields Fields, consoleText string) {
+	ensureLogger()
+	format, _ := logFormat.Load().(string)
+	if format == "json" {
+		recordSugar.With(getMergedFields(fields)...).Info()
+		return
+	}
+	Sugar.Info(consoleText)
 }
 
 func WithContext(ctx context.Context) *SugaredEntry {
