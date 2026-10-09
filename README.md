@@ -369,7 +369,7 @@ name := mask.Name("张三") // 张*
 | 中间件 | 说明 |
 |--------|------|
 | `RequestIDMiddleware()` | 请求 ID 生成（优先读取 X-Request-ID Header） |
-| `AccessLogMiddleware(format)` | 访问日志 |
+| `AccessLogMiddleware()` | 访问日志 |
 | `CorsMiddleware(config)` | CORS 跨域配置 |
 | `ErrorHandler()` | 统一错误处理 |
 | `bodyLimitMiddleware(limit)` | 请求体大小限制 |
@@ -391,25 +391,31 @@ HTTP 访问日志使用结构化字段输出，最终输出格式由 `log.InitLo
 
 `http.ServerConfig.AccessLogFormat` 和 `DefaultAccessLogFormat` 已废弃，仅保留兼容，不再参与访问日志格式化。
 
-访问日志字段：
+JSON 与 Console 使用同一组 HTTP 字段。JSON 将字段平铺到日志顶层且不输出 `msg`；Console 按固定顺序只输出字段值。日志时间由日志 Encoder 统一生成，不在 HTTP 字段中重复记录。
+
+访问日志字段（Console 顺序与下表一致）：
 
 | 字段 | 说明 | 示例 |
 |--------|------|------|
-| `client_ip` | 客户端 IP | `192.168.1.1` |
-| `time` | 请求时间 | `2026-06-01 15:04:05` |
+| `status` | 响应状态码 | `200` |
 | `method` | HTTP 方法 | `GET` |
 | `path` | 请求路径 | `/api/users` |
-| `status` | 响应状态码 | `200` |
-| `bytes_in` | 请求大小 | `1234` |
-| `bytes_out` | 响应大小 | `1234` |
-| `user_agent` | 用户代理 | `Mozilla/5.0` |
-| `request_time` | 请求耗时 | `0.023s` |
+| `query` | 查询参数 | `page=1` |
+| `client_ip` | 客户端 IP | `192.168.1.1` |
+| `host` | 请求 Host | `localhost:8800` |
 | `request_id` | 请求 ID | `abc-123-def` |
-| `error` | 错误信息 | `bind error` |
-| `query` | 查询参数（可选） | `page=1` |
-| `referer` | 来源页面（可选） | `https://google.com` |
-| `real_ip` | 真实 IP（可选，通过 X-Real-IP header） | `10.0.0.1` |
-| `protocol` | 协议版本（可选） | `HTTP/1.1` |
+| `user_agent` | 用户代理 | `Mozilla/5.0` |
+| `request_time` | 中间件开始至处理函数返回的耗时 | `0.023s` |
+| `bytes_out` | Gin 记录的响应体字节数，不含响应头和 Hijack 后的流量 | `1234` |
+| `referer` | 来源页面 | `https://example.com` |
+
+访问日志不再输出 `bytes_in`、`real_ip`、`protocol`。依赖旧字段或 Console 列位置的采集规则需要同步调整。
+
+通过 `NewGin` 安装的恢复中间件处理 panic 后，访问日志记录恢复后的状态码。Hijack 后根据实际写出的 HTTP 状态前缀记录状态（例如 WebSocket 升级的 `101`），无法确认时 JSON 为 `null`、Console 为 `-`。不会仅凭升级请求头推断成功。
+
+WebSocket 的 `request_time` 在处理函数持续处理会话时包含会话耗时；处理函数返回后的后台会话不在统计范围内。`bytes_out` 不是网络总流量，`client_ip` 的可信代理配置由调用方管理。
+
+INFO 访问日志只记录请求摘要，不包含错误详情。通过 `ErrorHandler` 处理的错误会单独输出 ERROR 日志。
 
 ---
 

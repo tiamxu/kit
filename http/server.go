@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -53,11 +55,8 @@ var accessLogFieldOrder = []string{
 	"request_id",
 	"user_agent",
 	"request_time",
-	"bytes_in",
 	"bytes_out",
 	"referer",
-	"protocol",
-	"real_ip",
 }
 
 const (
@@ -79,8 +78,8 @@ func NewGin(cfg ServerConfig) *gin.Engine {
 
 	router.Use(
 		RequestIDMiddleware(),
-		gin.Recovery(),
 		AccessLogMiddleware(),
+		gin.Recovery(),
 		corsMiddleware(cfg.CORSConfig),
 		ErrorHandler(),
 	)
@@ -134,11 +133,8 @@ func AccessLogMiddleware() gin.HandlerFunc {
 		start := time.Now()
 		path := c.Request.URL.Path
 		query := c.Request.URL.RawQuery
-
-		var requestSize int64
-		if c.Request.ContentLength > 0 {
-			requestSize = c.Request.ContentLength
-		}
+		writer := &accessLogWriter{ResponseWriter: c.Writer}
+		c.Writer = writer
 
 		c.Next()
 
@@ -149,7 +145,7 @@ func AccessLogMiddleware() gin.HandlerFunc {
 		}
 
 		fields := log.Fields{
-			"status":       c.Writer.Status(),
+			"status":       writer.accessStatus(),
 			"method":       c.Request.Method,
 			"path":         path,
 			"query":        query,
@@ -158,15 +154,77 @@ func AccessLogMiddleware() gin.HandlerFunc {
 			"request_id":   requestID,
 			"user_agent":   c.Request.UserAgent(),
 			"request_time": fmt.Sprintf("%.3fs", float64(latency.Microseconds())/1e6),
-			"bytes_in":     requestSize,
 			"bytes_out":    c.Writer.Size(),
 			"referer":      c.Request.Referer(),
-			"protocol":     c.Request.Proto,
-			"real_ip":      c.GetHeader("X-Real-IP"),
 		}
 
 		log.InfoRecord(fields, formatAccessLogConsole(fields))
 	}
+}
+
+type accessLogWriter struct {
+	gin.ResponseWriter
+	conn          *accessLogConn
+	writtenStatus int
+}
+
+func (w *accessLogWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *accessLogWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if w.ResponseWriter.Written() {
+		w.writtenStatus = w.ResponseWriter.Status()
+	}
+	conn, rw, err := w.ResponseWriter.Hijack()
+	if err != nil {
+		return conn, rw, err
+	}
+	w.conn = &accessLogConn{Conn: conn}
+	// net/http 返回空的写缓冲；保留自定义 Hijacker 已缓冲的数据。
+	if rw.Writer.Buffered() == 0 {
+		rw.Writer.Reset(w.conn)
+	}
+	return w.conn, rw, nil
+}
+
+func (w *accessLogWriter) accessStatus() any {
+	if w.conn == nil {
+		return w.ResponseWriter.Status()
+	}
+	if w.writtenStatus != 0 {
+		return w.writtenStatus
+	}
+	w.conn.mu.Lock()
+	defer w.conn.mu.Unlock()
+	if w.conn.status == 0 {
+		return nil
+	}
+	return w.conn.status
+}
+
+type accessLogConn struct {
+	net.Conn
+	mu     sync.Mutex
+	prefix [13]byte
+	size   int
+	status int
+}
+
+func (c *accessLogConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.size < len(c.prefix) {
+		c.size += copy(c.prefix[c.size:], p[:n])
+		if c.size == len(c.prefix) {
+			line := string(c.prefix[:])
+			if (strings.HasPrefix(line, "HTTP/1.1 ") || strings.HasPrefix(line, "HTTP/1.0 ")) && line[12] == ' ' {
+				if status, parseErr := strconv.Atoi(line[9:12]); parseErr == nil && status >= 100 && status <= 599 {
+					c.status = status
+				}
+			}
+		}
+	}
+	return n, err
 }
 
 func formatAccessLogConsole(fields log.Fields) string {
